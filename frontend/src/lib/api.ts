@@ -333,6 +333,78 @@ export function ledgerCsvUrl(period: string): string {
   return `/api/books/${encodeURIComponent(period)}/ledger.csv`;
 }
 
+// ---- Review Agent (monthly financial review) ----
+
+export interface PnlLine {
+  account_code: string;
+  account_name: string;
+  account_type: string;
+  current: string;
+  prior: string;
+  change: string;
+  change_pct: string;
+}
+
+export interface ReviewFlag {
+  flag_id: string;
+  kind: "variance" | "new_activity" | "round_sum" | "gst_drift";
+  account_code: string;
+  title: string;
+  detail: string;
+  amount: string;
+  status: "pending" | "verified";
+  verified_by: string;
+  verified_at: string;
+  ca_signoff: string;
+}
+
+export interface ReviewWorkbook {
+  period: string;
+  prior_period: string;
+  created_at: string;
+  pnl: PnlLine[];
+  summary: { income: string; cogs: string; expense: string; net_result: string };
+  flags: ReviewFlag[];
+  narrative: string;
+  narrative_note: string;
+  txn_counts: { current: number; prior: number };
+  verified_count: number;
+  pending_count: number;
+}
+
+export interface ReviewResponse {
+  workbook: ReviewWorkbook;
+  periods: string[];
+}
+
+export async function buildReview(period: string): Promise<ReviewResponse> {
+  return handle(
+    await fetch(`/api/review/${encodeURIComponent(period)}`, { method: "POST" }),
+  );
+}
+
+export async function getReview(period: string): Promise<ReviewResponse> {
+  return handle(await fetch(`/api/review/${encodeURIComponent(period)}`));
+}
+
+export async function verifyReviewFlag(
+  period: string,
+  flag_id: string,
+  actor: string,
+  ca_signoff = "",
+): Promise<ReviewResponse> {
+  return handle(
+    await fetch(
+      `/api/review/${encodeURIComponent(period)}/flags/${encodeURIComponent(flag_id)}/verify`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor, ca_signoff }),
+      },
+    ),
+  );
+}
+
 // ---- Operations feed ----
 
 export async function getOperations(limit = 25): Promise<{ events: TrailEvent[] }> {

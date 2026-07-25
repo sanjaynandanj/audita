@@ -11,6 +11,7 @@ CLOSE_DIR = DATA_DIR / "close"
 UPLOADS_DIR = DATA_DIR / "uploads"
 INVOICES_DIR = DATA_DIR / "invoices"
 BOOKS_DIR = DATA_DIR / "books"
+REVIEW_DIR = DATA_DIR / "review"
 EVENTS_DB = DATA_DIR / "events.db"
 
 # Signed report links expire after 7 days by default

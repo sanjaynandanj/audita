@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import tempfile
 from dataclasses import asdict as _asdict
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -42,6 +43,13 @@ from .parsers.bank import parse_bank_ledger, parse_bank_statement
 from .report.bank_builder import BankReport, BankReportStore, build_bank_report
 from .report.builder import Report, ReportStore, build_report
 from .report.excel import export_xlsx
+from .review.compute import (
+    ReviewWorkbook,
+    compute_flags,
+    compute_pnl,
+    prior_period_of,
+)
+from .review.store import AlreadyVerified, ReviewStore
 
 app = FastAPI(title="Audita", docs_url=None, redoc_url=None)
 _cors_origins = [
@@ -690,6 +698,115 @@ async def api_export_ledger(period: str):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="audita-ledger-{period}.csv"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Review Agent (monthly financial review) — PRD-2 Phase 3
+# ---------------------------------------------------------------------------
+
+review_store = ReviewStore(config.REVIEW_DIR)
+
+REVIEW_AGENT = "review-agent/0.1"
+
+
+def _workbook_json(wb: ReviewWorkbook) -> dict:
+    data = _asdict(wb)
+    data["verified_count"] = wb.verified_count
+    data["pending_count"] = wb.pending_count
+    return data
+
+
+def _register_tax_total(period: str) -> Decimal | None:
+    confirmed = invoice_store.list(period=period, status="confirmed")
+    if not confirmed:
+        return None
+    total = Decimal("0")
+    for doc in confirmed:
+        for key in ("igst", "cgst", "sgst", "cess"):
+            total += Decimal(doc.fields.get(key, "0") or "0")
+    return total
+
+
+@app.post("/api/review/{period}")
+async def api_build_review(period: str):
+    from .review.narrate import is_configured, narrate_review
+
+    if not PERIOD_RE.match(period):
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    current = ledger_store.load(period)
+    if not any(t.status in ("coded", "confirmed") for t in current.txns):
+        raise HTTPException(
+            status_code=400,
+            detail=f"No categorized transactions for {period}. Code the books first.",
+        )
+    prior_period = prior_period_of(period)
+    prior = ledger_store.load(prior_period)
+    accounts = coa.list()
+
+    pnl, summary = compute_pnl(current, prior, accounts)
+    flags = compute_flags(current, prior, accounts,
+                          gst_register_tax_total=_register_tax_total(period))
+    wb = ReviewWorkbook(
+        period=period,
+        prior_period=prior_period,
+        created_at="",
+        pnl=pnl,
+        summary=summary,
+        flags=flags,
+        txn_counts={
+            "current": sum(1 for t in current.txns if t.status in ("coded", "confirmed")),
+            "prior": sum(1 for t in prior.txns if t.status in ("coded", "confirmed")),
+        },
+    )
+    wb = review_store.save_new(wb)
+    events.append(REVIEW_AGENT, "review_computed",
+                  input_doc_ref=f"{prior_period}..{period}",
+                  output_ref=f"{period};flags={len(wb.flags)}")
+
+    if is_configured():
+        try:
+            narrative = narrate_review(_workbook_json(wb))
+            wb = review_store.set_narrative(period, narrative)
+            events.append(REVIEW_AGENT, "review_narrated", output_ref=period)
+        except Exception as exc:  # narration must never block the computed workbook
+            wb = review_store.set_narrative(period, "", note=f"Narration failed: {exc}")
+    else:
+        wb = review_store.set_narrative(
+            period, "", note="Narration not configured — computed tables stand alone."
+        )
+
+    return {"workbook": _workbook_json(wb), "periods": review_store.periods()}
+
+
+@app.get("/api/review/{period}")
+async def api_get_review(period: str):
+    if not PERIOD_RE.match(period):
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    if not review_store.exists(period):
+        raise HTTPException(status_code=404, detail=f"No review workbook for {period} yet.")
+    wb = review_store.load(period)
+    return {"workbook": _workbook_json(wb), "periods": review_store.periods()}
+
+
+@app.post("/api/review/{period}/flags/{flag_id}/verify")
+async def api_verify_flag(period: str, flag_id: str, payload: dict = Body(...)):
+    actor = str(payload.get("actor", "")).strip()
+    ca_signoff = str(payload.get("ca_signoff", "")).strip()
+    if not actor:
+        raise HTTPException(status_code=400, detail="actor is required to verify a flag.")
+    try:
+        review_store.verify_flag(period, flag_id, actor=actor, ca_signoff=ca_signoff)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Review workbook not found.") from None
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Flag not found.") from None
+    except AlreadyVerified:
+        raise HTTPException(status_code=409, detail="Flag already verified.") from None
+    events.append(REVIEW_AGENT, "review_flag_verified",
+                  input_doc_ref=flag_id, output_ref=period,
+                  actor=actor, reviewed_by=ca_signoff or actor)
+    wb = review_store.load(period)
+    return {"workbook": _workbook_json(wb), "periods": review_store.periods()}
 
 
 @app.get("/api/operations")

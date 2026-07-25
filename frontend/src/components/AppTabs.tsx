@@ -5,6 +5,7 @@ const tabs = [
   { to: "/app/bank", label: "Bank Recon", match: (p: string) => p.startsWith("/app/bank") },
   { to: "/app/invoices", label: "Invoices", match: (p: string) => p.startsWith("/app/invoices") },
   { to: "/app/books", label: "Books", match: (p: string) => p.startsWith("/app/books") },
+  { to: "/app/review", label: "Review", match: (p: string) => p.startsWith("/app/review") },
   { to: "/app/close", label: "Close", match: (p: string) => p.startsWith("/app/close") },
   { to: "/app/ops", label: "Operations", match: (p: string) => p.startsWith("/app/ops") },
 ];

@@ -5,6 +5,7 @@ import ReportPage from "./pages/Report";
 import BankRecon, { BankReportPage } from "./pages/BankRecon";
 import Invoices from "./pages/Invoices";
 import Books from "./pages/Books";
+import Review from "./pages/Review";
 import Close from "./pages/Close";
 import Operations from "./pages/Operations";
 
@@ -18,6 +19,7 @@ export default function App() {
       <Route path="/app/bank/r/:token" element={<BankReportPage />} />
       <Route path="/app/invoices" element={<Invoices />} />
       <Route path="/app/books" element={<Books />} />
+      <Route path="/app/review" element={<Review />} />
       <Route path="/app/close" element={<Close />} />
       <Route path="/app/ops" element={<Operations />} />
     </Routes>
