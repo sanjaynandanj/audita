@@ -50,6 +50,7 @@ from .review.compute import (
     prior_period_of,
 )
 from .review.store import AlreadyVerified, ReviewStore
+from .workqueue import build_workqueue
 
 app = FastAPI(title="Audita", docs_url=None, redoc_url=None)
 _cors_origins = [
@@ -807,6 +808,32 @@ async def api_verify_flag(period: str, flag_id: str, payload: dict = Body(...)):
                   actor=actor, reviewed_by=ca_signoff or actor)
     wb = review_store.load(period)
     return {"workbook": _workbook_json(wb), "periods": review_store.periods()}
+
+
+# ---------------------------------------------------------------------------
+# Agent Workspace (unified review queue) — PRD-2 Phase 4
+# ---------------------------------------------------------------------------
+
+@app.get("/api/workqueue")
+async def api_workqueue():
+    items = build_workqueue(
+        reports_dir=Path(config.REPORTS_DIR),
+        invoice_store=invoice_store,
+        ledger_store=ledger_store,
+        close_store=close_store,
+        review_store=review_store,
+        sign=sign_report_id,
+    )
+    by_agent: dict[str, int] = {}
+    total_decisions = 0
+    for item in items:
+        by_agent[item.agent] = by_agent.get(item.agent, 0) + item.count
+        total_decisions += item.count
+    return {
+        "items": [_asdict(i) for i in items],
+        "total_decisions": total_decisions,
+        "by_agent": by_agent,
+    }
 
 
 @app.get("/api/operations")

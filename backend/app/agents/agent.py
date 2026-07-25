@@ -15,7 +15,10 @@ from google.adk.agents import Agent
 
 from .tools import (
     get_close_status,
+    get_invoice_status,
+    get_ledger_status,
     get_report_summary,
+    get_workqueue,
     list_reports,
     run_bank_reconciliation,
     run_reconciliation,
@@ -43,7 +46,10 @@ root_agent = Agent(
         "When the user gives GST file paths, call run_reconciliation. For a bank "
         "statement + ledger, call run_bank_reconciliation. For month-end status, "
         "call get_close_status with the YYYY-MM period. When they ask about an "
-        "existing report, call get_report_summary or list_reports first."
+        "existing report, call get_report_summary or list_reports first. When "
+        "they ask what needs their attention (or anything like 'what's pending'), "
+        "call get_workqueue. For invoice capture progress call get_invoice_status; "
+        "for bookkeeping progress call get_ledger_status."
     ),
     tools=[
         run_reconciliation,
@@ -51,5 +57,8 @@ root_agent = Agent(
         list_reports,
         run_bank_reconciliation,
         get_close_status,
+        get_workqueue,
+        get_invoice_status,
+        get_ledger_status,
     ],
 )

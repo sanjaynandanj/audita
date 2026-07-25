@@ -7,11 +7,11 @@ reconciliation, month-end close — and a chartered accountant signs every rupee
 audita/
 ├── backend/     Python 3.12 · FastAPI · deterministic matching engines · SQLite append-only
 │   │            event log · Google ADK agent layer · Gemini vision (env-gated)
-│   ├── app/{engine,parsers,report,close,events,agents,vision,ap,books,review}
-│   ├── tests/               106 tests (engine, parsers, report gating, API, event log, AP, books, review)
+│   ├── app/{engine,parsers,report,close,events,agents,vision,ap,books,review} + workqueue
+│   ├── tests/               112 tests (engine, parsers, report gating, API, event log, AP, books, review, workqueue)
 │   └── sample_data/         GSTR-2B JSON, purchase register, bank statement + ledger
 ├── frontend/    TypeScript · React 19 · Tailwind v4 · Vite
-│   └── src/pages/           Landing, ITC Recon, Bank Recon, Invoices, Books, Review, Close, Operations
+│   └── src/pages/           Landing, Workspace, ITC Recon, Bank Recon, Invoices, Books, Review, Close, Operations
 ├── docs/        PRD · TRD · SECURITY · DEPLOYMENT
 ├── Dockerfile   multi-stage: bun builds SPA → python image serves API + app on :8080
 └── docker-compose.yml
@@ -27,6 +27,7 @@ audita/
 | Invoice Agent | in service | Photo/PDF of a bill → extracted fields → human-confirmed row in the purchase register → feeds ITC recon |
 | Bookkeeping Agent | in service | Bank transactions coded to a chart of accounts: deterministic rules first, LLM suggestions queued for review, learning loop from confirmations |
 | Review Agent | in service | Month-end review workbook: deterministic P&L movement + anomaly flags (variance, new counterparties, round sums, GST drift), CA-narrated when configured |
+| Agent Workspace | in service | The daily surface: every pending human decision from every agent in one queue, live activity feed alongside |
 | Vision Agent | beta | Scanned-invoice field extraction (needs `GEMINI_API_KEY`) |
 
 Product guarantees: headline counts **only human-verified exceptions** · append-only audit

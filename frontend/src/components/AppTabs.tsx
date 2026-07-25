@@ -1,7 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
 
 const tabs = [
-  { to: "/app", label: "ITC Recon", match: (p: string) => p === "/app" || p.startsWith("/app/r/") },
+  { to: "/app", label: "Workspace", match: (p: string) => p === "/app" },
+  { to: "/app/recon", label: "ITC Recon", match: (p: string) => p.startsWith("/app/recon") || p.startsWith("/app/r/") },
   { to: "/app/bank", label: "Bank Recon", match: (p: string) => p.startsWith("/app/bank") },
   { to: "/app/invoices", label: "Invoices", match: (p: string) => p.startsWith("/app/invoices") },
   { to: "/app/books", label: "Books", match: (p: string) => p.startsWith("/app/books") },

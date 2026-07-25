@@ -19,7 +19,7 @@ export default function Nav() {
             </>
           )}
           <Link
-            to="/app"
+            to="/app/recon"
             className="border border-ink bg-ink px-5 py-2 text-[13px] font-semibold text-paper transition-colors hover:bg-paper hover:text-ink"
           >
             Run a recon

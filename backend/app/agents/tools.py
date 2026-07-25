@@ -131,6 +131,99 @@ def run_bank_reconciliation(statement_path: str, ledger_path: str, client_name: 
     }
 
 
+def get_workqueue() -> dict:
+    """Get every pending human decision across all Audita agents.
+
+    Returns:
+        Dict with total pending decision count, per-agent counts, and the
+        queue items (agent, title, amount in INR, age in days).
+    """
+    from ..ap.store import InvoiceStore
+    from ..books.store import LedgerStore
+    from ..close.workbook import CloseStore
+    from ..review.store import ReviewStore
+    from ..workqueue import build_workqueue
+
+    items = build_workqueue(
+        reports_dir=Path(config.REPORTS_DIR),
+        invoice_store=InvoiceStore(config.INVOICES_DIR),
+        ledger_store=LedgerStore(config.BOOKS_DIR / "ledgers"),
+        close_store=CloseStore(config.CLOSE_DIR),
+        review_store=ReviewStore(config.REVIEW_DIR),
+        sign=lambda report_id: report_id,  # agent chat has no link surface
+    )
+    by_agent: dict[str, int] = {}
+    for item in items:
+        by_agent[item.agent] = by_agent.get(item.agent, 0) + item.count
+    return {
+        "total_pending_decisions": sum(i.count for i in items),
+        "by_agent": by_agent,
+        "items": [
+            {"agent": i.agent, "title": i.title, "detail": i.detail,
+             "amount_inr": i.amount, "count": i.count, "age_days": i.age_days}
+            for i in items
+        ],
+        "note": "Every item needs a named human decision before it can enter a headline.",
+    }
+
+
+def get_invoice_status(period: str) -> dict:
+    """Get Invoice Agent status for a period: drafts awaiting confirmation
+    and confirmed register rows.
+
+    Args:
+        period: The period in YYYY-MM format, e.g. "2026-07".
+
+    Returns:
+        Dict with draft/confirmed counts and per-invoice one-liners.
+    """
+    from ..ap.store import InvoiceStore
+
+    store = InvoiceStore(config.INVOICES_DIR)
+    drafts = store.list(period=period, status="draft")
+    confirmed = store.list(period=period, status="confirmed")
+    return {
+        "period": period,
+        "drafts_awaiting_confirmation": len(drafts),
+        "confirmed_in_register": len(confirmed),
+        "drafts": [
+            {"invoice_id": d.invoice_id,
+             "supplier": d.fields.get("supplier_name") or d.source_file,
+             "total_inr": d.fields.get("total", "0"), "extraction": d.extraction}
+            for d in drafts
+        ],
+        "confirmed_total_inr": str(sum(
+            (Decimal(d.fields.get("total", "0") or "0") for d in confirmed), Decimal("0")
+        )),
+    }
+
+
+def get_ledger_status(period: str) -> dict:
+    """Get Bookkeeping Agent status for a period: coding progress and
+    per-account totals from the categorized ledger.
+
+    Args:
+        period: The period in YYYY-MM format, e.g. "2026-07".
+
+    Returns:
+        Dict with coded/confirmed/pending counts and account totals
+        (coded + confirmed entries only; pending never enters a total).
+    """
+    from ..books.store import LedgerStore, summarize
+
+    ledger = LedgerStore(config.BOOKS_DIR / "ledgers").load(period)
+    summary = summarize(ledger)
+    return {
+        "period": period,
+        "transactions": summary["txn_count"],
+        "coded_by_rules": summary["coded_count"],
+        "human_confirmed": summary["confirmed_count"],
+        "awaiting_review": summary["pending_count"],
+        "account_totals_inr": summary["accounts"],
+        "note": "Account totals include only rule-coded and human-confirmed entries.",
+    }
+
+
 def get_close_status(period: str) -> dict:
     """Get the month-end close workbook status for a period.
 

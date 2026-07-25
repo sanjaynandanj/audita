@@ -107,6 +107,7 @@ but recorded and displayed.
 | `POST /api/review/{period}` | build/rebuild review workbook: deterministic P&L movement + flags; env-gated narration; verified flags survive rebuilds via content-derived flag ids |
 | `GET /api/review/{period}` | workbook JSON (404 until built) |
 | `POST /api/review/{period}/flags/{id}/verify` | `{actor, ca_signoff}` — 409 on re-verify |
+| `GET /api/workqueue` | every pending human decision across all agents (recon exceptions behind signed links, drafts, uncoded txns, open close items, unverified flags) |
 | `GET /api/operations?limit=` | recent events from the append-only log |
 | `GET /r/{token}` · `POST /r/{token}/verify` · `GET /r/{token}/export.xlsx` | server-rendered workpaper + Excel (share-link surface) |
 | `GET /healthz` | liveness + SPA flag |
@@ -136,7 +137,7 @@ Report IDs: `secrets.token_hex(8)`; path traversal blocked by `isalnum()` check 
 
 | Concern | Requirement | Current state |
 |---|---|---|
-| Correctness | precision > recall everywhere; ambiguous ⇒ unresolved | enforced + tested (106 tests) |
+| Correctness | precision > recall everywhere; ambiguous ⇒ unresolved | enforced + tested (112 tests) |
 | Recon latency | < 60 s for a 10k-line register | in-memory matching; O(n·m) per GSTIN group — fine at pilot scale; index by invoice prefix if needed |
 | Availability | pilot: single instance, restart-safe | stateless app over durable volume |
 | Auditability | every mutating action event-logged with actor | enforced |

@@ -405,6 +405,30 @@ export async function verifyReviewFlag(
   );
 }
 
+// ---- Agent Workspace (unified review queue) ----
+
+export interface WorkItem {
+  agent: "itc-recon" | "invoice" | "bookkeeping" | "close" | "review";
+  kind: string;
+  title: string;
+  detail: string;
+  amount: string;
+  count: number;
+  ref: string;
+  age_days: number;
+  link: string;
+}
+
+export interface WorkqueueResponse {
+  items: WorkItem[];
+  total_decisions: number;
+  by_agent: Record<string, number>;
+}
+
+export async function getWorkqueue(): Promise<WorkqueueResponse> {
+  return handle(await fetch("/api/workqueue"));
+}
+
 // ---- Operations feed ----
 
 export async function getOperations(limit = 25): Promise<{ events: TrailEvent[] }> {

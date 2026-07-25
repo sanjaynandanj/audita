@@ -6,6 +6,7 @@ import BankRecon, { BankReportPage } from "./pages/BankRecon";
 import Invoices from "./pages/Invoices";
 import Books from "./pages/Books";
 import Review from "./pages/Review";
+import Workspace from "./pages/Workspace";
 import Close from "./pages/Close";
 import Operations from "./pages/Operations";
 
@@ -13,7 +14,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
-      <Route path="/app" element={<NewRecon />} />
+      <Route path="/app" element={<Workspace />} />
+      <Route path="/app/recon" element={<NewRecon />} />
       <Route path="/app/r/:token" element={<ReportPage />} />
       <Route path="/app/bank" element={<BankRecon />} />
       <Route path="/app/bank/r/:token" element={<BankReportPage />} />
