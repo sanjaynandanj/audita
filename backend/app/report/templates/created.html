@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Audita — Report Ready{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:40px auto;text-align:center;">
+  <div style="font-size:52px;">✅</div>
+  <h1>Report generated</h1>
+  <p class="sub">{{ report.client_name }}{% if report.period_note %} — {{ report.period_note }}{% endif %}</p>
+
+  <div class="cards" style="text-align:left;">
+    <div class="card hero-warn"><div class="label">Exceptions to verify</div><div class="value warn">{{ report.exceptions|length }}</div></div>
+    <div class="card hero-neutral"><div class="label">Missed ITC</div><div class="value">{{ report.missed_itc|length }}</div></div>
+    <div class="card hero-ok"><div class="label">Matched clean</div><div class="value ok">{{ report.matched_count }}</div></div>
+  </div>
+
+  <a class="btn" href="{{ link }}" style="font-size:15px;padding:14px 28px;">Open the report →</a>
+
+  <div style="margin-top:22px;display:flex;gap:8px;align-items:center;justify-content:center;">
+    <input type="text" class="mono" id="linkBox" value="{{ link }}" readonly
+           style="max-width:420px;font-size:11.5px;color:var(--sub);border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:#fff;">
+    <button class="btn ghost sm" onclick="navigator.clipboard.writeText(document.getElementById('linkBox').value);this.textContent='Copied ✓'">Copy link</button>
+  </div>
+  <p class="sub" style="margin-top:8px;font-size:12.5px;">Signed link · expires in {{ expiry_days }} days · anyone with the link can view, only reviewers verify.</p>
+
+  <p class="note" style="margin-top:26px;text-align:left;">The headline ₹ starts at zero — it counts only exceptions a human reviewer has verified. Open the report and verify each exception before sharing it with the client.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,97 @@
+{
+  "data": {
+    "gstin": "29ZZZZZ9999Z1Z9",
+    "rtnprd": "042026",
+    "docdata": {
+      "b2b": [
+        {
+          "ctin": "29AAACA1111A1Z5",
+          "trdnm": "Supplier One Pvt Ltd",
+          "inv": [
+            {
+              "inum": "S1/001",
+              "dt": "05-04-2026",
+              "val": 118000,
+              "rev": "N",
+              "items": [
+                {"num": 1, "itm_det": {"txval": 100000, "igst": 18000, "cgst": 0, "sgst": 0, "cess": 0}}
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "27BBBBB2222B1Z3",
+          "trdnm": "Supplier Two Traders",
+          "inv": [
+            {
+              "inum": "S2-450",
+              "dt": "12-04-2026",
+              "val": 59000,
+              "rev": "N",
+              "items": [
+                {"num": 1, "itm_det": {"txval": 50000, "igst": 0, "cgst": 4500, "sgst": 4500, "cess": 0}}
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "29CCCCC3333C1Z1",
+          "trdnm": "Supplier Three Services",
+          "inv": [
+            {
+              "inum": "S3/777",
+              "dt": "20-04-2026",
+              "val": 23600,
+              "rev": "Y",
+              "items": [
+                {"num": 1, "itm_det": {"txval": 20000, "igst": 3600, "cgst": 0, "sgst": 0, "cess": 0}}
+              ]
+            }
+          ]
+        }
+      ],
+      "b2ba": [
+        {
+          "ctin": "27BBBBB2222B1Z3",
+          "trdnm": "Supplier Two Traders",
+          "inv": [
+            {
+              "inum": "S2-390",
+              "dt": "28-03-2026",
+              "val": 35400,
+              "rev": "N",
+              "items": [
+                {"num": 1, "itm_det": {"txval": 30000, "igst": 5400, "cgst": 0, "sgst": 0, "cess": 0}}
+              ]
+            }
+          ]
+        }
+      ],
+      "cdnr": [
+        {
+          "ctin": "29AAACA1111A1Z5",
+          "trdnm": "Supplier One Pvt Ltd",
+          "nt": [
+            {
+              "ntnum": "CN/09",
+              "dt": "18-04-2026",
+              "val": 11800,
+              "items": [
+                {"num": 1, "itm_det": {"txval": 10000, "igst": 1800, "cgst": 0, "sgst": 0, "cess": 0}}
+              ]
+            }
+          ]
+        }
+      ],
+      "isd": [
+        {
+          "ctin": "29DDDDD4444D1Z8",
+          "trdnm": "Head Office ISD",
+          "doclist": [
+            {"docnum": "ISD/22", "docdt": "30-04-2026", "igst": 2500, "cgst": 0, "sgst": 0, "cess": 0}
+          ]
+        }
+      ]
+    }
+  }
+}

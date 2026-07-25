@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Audita — Find the ITC you're losing{% endblock %}
+
+{% block head %}
+<style>
+  .hero { text-align: center; padding: 34px 0 10px; }
+  .hero h1 { font-size: 42px; line-height: 1.12; margin-bottom: 12px; }
+  .hero h1 em { font-style: normal; background: linear-gradient(90deg, #6366f1, #a855f7); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p { max-width: 620px; margin: 0 auto; color: var(--sub); font-size: 16px; }
+  .panel { max-width: 700px; margin: 34px auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 30px 34px; }
+  .drops { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+  @media (max-width: 640px) { .drops { grid-template-columns: 1fr; } }
+  .drop {
+    border: 1.5px dashed #c7d2fe; border-radius: 14px; background: #f8faff;
+    padding: 26px 18px; text-align: center; cursor: pointer; transition: all .15s;
+  }
+  .drop:hover, .drop.drag { border-color: var(--accent-2); background: #eef2ff; }
+  .drop.filled { border-style: solid; border-color: #6ee7b7; background: var(--ok-bg); }
+  .drop .ico { font-size: 26px; }
+  .drop .t { font-weight: 700; font-size: 14px; margin: 8px 0 3px; }
+  .drop .d { font-size: 12px; color: var(--sub); }
+  .drop .fname { font-size: 12px; font-weight: 600; color: var(--ok); margin-top: 6px; word-break: break-all; }
+  .drop input[type=file] { display: none; }
+  .trust { display: flex; gap: 26px; justify-content: center; margin-top: 30px; flex-wrap: wrap; }
+  .trust .item { display: flex; gap: 9px; align-items: flex-start; max-width: 250px; text-align: left; }
+  .trust .item b { display: block; font-size: 13px; }
+  .trust .item span { font-size: 12px; color: var(--sub); }
+  .trust .ico { font-size: 18px; margin-top: 1px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="hero">
+  <h1>Find the input tax credit<br><em>you're silently losing</em></h1>
+  <p>Upload your GSTR-2B and purchase register. Audita's recon agent matches every invoice, quantifies the ITC at risk in rupees, and a chartered accountant verifies every exception before you see the number.</p>
+</div>
+
+<form class="panel" method="post" action="/recon" enctype="multipart/form-data" id="reconForm">
+  <div class="field">
+    <label>Client / business name</label>
+    <input type="text" name="client_name" required placeholder="e.g. Acme Textiles Pvt Ltd">
+  </div>
+  <div class="field">
+    <label>Period <span class="sub" style="font-weight:400;">(optional)</span></label>
+    <input type="text" name="period_note" placeholder="e.g. FY 2025-26 · April">
+  </div>
+
+  <div class="drops">
+    <label class="drop" id="dropG2b">
+      <input type="file" name="gstr2b_file" accept=".json,.csv,.xlsx,.xls" required>
+      <div class="ico">🧾</div>
+      <div class="t">GSTR-2B</div>
+      <div class="d">Portal JSON download, or CSV/XLSX</div>
+      <div class="fname"></div>
+    </label>
+    <label class="drop" id="dropReg">
+      <input type="file" name="register_file" accept=".csv,.xlsx,.xls" required>
+      <div class="ico">📒</div>
+      <div class="t">Purchase register</div>
+      <div class="d">Tally CSV/XLSX export</div>
+      <div class="fname"></div>
+    </label>
+  </div>
+
+  <button class="btn" type="submit" style="width:100%;font-size:15px;padding:14px;">Run reconciliation →</button>
+</form>
+
+<div class="trust">
+  <div class="item"><div class="ico">🔒</div><div><b>Your data stays yours</b><span>Processed for this report only. Deleted on request. Links expire automatically.</span></div></div>
+  <div class="item"><div class="ico">🧑‍💼</div><div><b>CA-verified numbers</b><span>The headline counts only exceptions a named reviewer has signed off.</span></div></div>
+  <div class="item"><div class="ico">🧾</div><div><b>Defensible trail</b><span>Every agent action lands in an append-only audit log — nothing can be edited.</span></div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll(".drop").forEach(drop => {
+    const input = drop.querySelector("input[type=file]");
+    const fname = drop.querySelector(".fname");
+    const show = () => {
+      if (input.files.length) { drop.classList.add("filled"); fname.textContent = "✓ " + input.files[0].name; }
+    };
+    input.addEventListener("change", show);
+    ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("drag"); }));
+    ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("drag"); }));
+    drop.addEventListener("drop", e => {
+      if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; show(); }
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,16 @@
+services:
+  audita:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      AUDITA_SECRET_KEY: ${AUDITA_SECRET_KEY:?set in .env}
+      AUDITA_CORS_ORIGINS: ${AUDITA_CORS_ORIGINS:-}
+      AUDITA_LINK_MAX_AGE: ${AUDITA_LINK_MAX_AGE:-604800}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - audita-data:/data
+    restart: unless-stopped
+
+volumes:
+  audita-data:

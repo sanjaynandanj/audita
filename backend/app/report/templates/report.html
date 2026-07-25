@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Audita — {{ report.client_name }}{% endblock %}
+
+{% macro record_cell(rec) -%}
+  {%- if rec -%}
+    <span class="mono" style="font-size:12.5px;font-weight:600;">{{ rec.invoice_no }}</span><br>
+    <span class="sub" style="font-size:12px;">{{ rec.invoice_date }} · tax ₹{{ rec.total_tax }} · taxable ₹{{ rec.taxable_value }}</span><br>
+    <span class="sub mono" style="font-size:10.5px;">{{ rec.source_ref }}</span>
+  {%- else -%}<span class="sub">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;">
+  <div>
+    <div class="sub" style="text-transform:uppercase;letter-spacing:.08em;font-size:11px;font-weight:700;">ITC Reconciliation Report</div>
+    <h1>{{ report.client_name }}</h1>
+    <div class="sub">{% if report.period_note %}{{ report.period_note }} · {% endif %}generated {{ report.created_at[:10] }} · report {{ report.report_id }}</div>
+  </div>
+  <div class="no-print" style="display:flex;gap:10px;">
+    <a class="btn ghost sm" href="/r/{{ token }}/export.xlsx">⬇ Excel</a>
+    <a class="btn ghost sm" href="javascript:window.print()">🖨 Print</a>
+  </div>
+</div>
+
+{% set total_exc = report.exceptions|length %}
+{% set verified_exc = report.exceptions|selectattr("verified")|list|length %}
+
+<div class="cards">
+  <div class="card hero-risk">
+    <div class="label">ITC at risk · verified</div>
+    <div class="value risk" data-countup="{{ report.verified_at_risk }}">₹{{ report.verified_at_risk }}</div>
+    <div class="hint">{{ verified_exc }}/{{ total_exc }} exceptions verified</div>
+    <div class="progress"><div style="width: {{ (verified_exc / total_exc * 100) if total_exc else 0 }}%"></div></div>
+  </div>
+  <div class="card hero-warn">
+    <div class="label">Pending verification</div>
+    <div class="value warn" data-countup="{{ report.pending_at_risk }}">₹{{ report.pending_at_risk }}</div>
+    <div class="hint">awaiting reviewer sign-off</div>
+  </div>
+  <div class="card hero-neutral">
+    <div class="label">Missed ITC · in 2B, not booked</div>
+    <div class="value" data-countup="{{ report.missed_itc_total }}">₹{{ report.missed_itc_total }}</div>
+    <div class="hint">{{ report.missed_itc|length }} credit(s) you may be entitled to</div>
+  </div>
+  <div class="card hero-ok">
+    <div class="label">Matched clean</div>
+    <div class="value ok">{{ report.matched_count }}</div>
+    <div class="hint">invoices · ₹{{ report.matched_tax_total }} tax reconciled</div>
+  </div>
+</div>
+
+<div class="note">The headline counts <strong>only human-verified exceptions</strong>. Unresolved items — credit/debit notes, 2B amendments, reverse charge, ISD, ambiguous matches — are quarantined below and never touch the headline.</div>
+
+<h2>ITC at risk — verify each exception <span class="count">{{ report.exceptions|length }}</span></h2>
+<div class="tablewrap">
+<table>
+  <tr><th>ID</th><th>Type</th><th>Supplier</th><th>Books</th><th>GSTR-2B</th><th>₹ at stake</th><th>Reason</th><th>Status</th><th class="no-print">Verify</th></tr>
+  {% for e in report.exceptions %}
+  <tr>
+    <td class="mono">{{ e.exception_id }}</td>
+    <td><span class="badge bucket">{{ e.bucket|replace("_"," ") }}</span></td>
+    <td style="min-width:140px;">{{ (e.books or e.gstr2b).supplier_name or '' }}<br><span class="sub mono" style="font-size:10.5px;">{{ (e.books or e.gstr2b).gstin }}</span></td>
+    <td>{{ record_cell(e.books) }}</td>
+    <td>{{ record_cell(e.gstr2b) }}</td>
+    <td><span class="amount risk">₹{{ e.itc_amount }}</span></td>
+    <td style="max-width:200px;">{{ e.reason }}</td>
+    <td>
+      {% if e.verified %}<span class="badge verified">✓ VERIFIED</span><br><span class="sub" style="font-size:11px;">{{ e.verified_by }}{% if e.ca_signoff %} · {{ e.ca_signoff }}{% endif %}</span>
+      {% else %}<span class="badge pending">PENDING</span>{% endif %}
+    </td>
+    <td class="no-print">
+      {% if not e.verified %}
+      <form method="post" action="/r/{{ token }}/verify" style="display:flex;flex-direction:column;gap:6px;min-width:130px;">
+        <input type="hidden" name="exception_id" value="{{ e.exception_id }}">
+        <input type="text" name="actor" placeholder="Reviewer" required style="padding:6px 9px;font-size:12px;">
+        <input type="text" name="ca_signoff" placeholder="CA sign-off (opt)" style="padding:6px 9px;font-size:12px;">
+        <button class="btn sm" type="submit">Verify</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="9" class="sub" style="text-align:center;padding:26px;">No at-risk exceptions — clean period. 🎉</td></tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Missed ITC — credit available, not booked <span class="count">{{ report.missed_itc|length }}</span></h2>
+<div class="tablewrap">
+<table>
+  <tr><th>ID</th><th>Supplier</th><th>GSTR-2B</th><th>₹ credit</th><th>Reason</th></tr>
+  {% for e in report.missed_itc %}
+  <tr>
+    <td class="mono">{{ e.exception_id }}</td>
+    <td>{{ e.gstr2b.supplier_name or '' }}<br><span class="sub mono" style="font-size:10.5px;">{{ e.gstr2b.gstin }}</span></td>
+    <td>{{ record_cell(e.gstr2b) }}</td>
+    <td><span class="amount">₹{{ e.itc_amount }}</span></td>
+    <td>{{ e.reason }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="sub" style="text-align:center;padding:22px;">None.</td></tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Unresolved — quarantined from the headline <span class="count">{{ report.unresolved|length }}</span></h2>
+<div class="tablewrap">
+<table>
+  <tr><th>ID</th><th>Supplier</th><th>Books</th><th>GSTR-2B</th><th>₹ involved</th><th>Why unresolved</th></tr>
+  {% for e in report.unresolved %}
+  <tr>
+    <td class="mono">{{ e.exception_id }}</td>
+    <td>{{ (e.books or e.gstr2b).supplier_name or '' }}<br><span class="sub mono" style="font-size:10.5px;">{{ (e.books or e.gstr2b).gstin }}</span></td>
+    <td>{{ record_cell(e.books) }}</td>
+    <td>{{ record_cell(e.gstr2b) }}</td>
+    <td><span class="amount">₹{{ e.itc_amount }}</span></td>
+    <td>{{ e.reason }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="sub" style="text-align:center;padding:22px;">None.</td></tr>
+  {% endfor %}
+</table>
+</div>
+
+<details>
+  <summary>Audit trail — append-only, {{ trail|length }} events</summary>
+  <div class="tablewrap">
+  <table>
+    <tr><th>#</th><th>Agent</th><th>Action</th><th>Input</th><th>Output</th><th>Actor</th><th>Reviewed by</th><th>Timestamp (UTC)</th></tr>
+    {% for ev in trail %}
+    <tr class="mono">
+      <td>{{ ev.event_id }}</td><td>{{ ev.agent }}</td><td>{{ ev.action }}</td>
+      <td>{{ ev.input_doc_ref }}</td><td>{{ ev.output_ref }}</td>
+      <td>{{ ev.actor }}</td><td>{{ ev.reviewed_by }}</td><td>{{ ev.ts[:19] }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  <p class="sub" style="margin-top:10px;">Entries physically cannot be edited or deleted — UPDATE and DELETE are rejected at the database level.</p>
+</details>
+{% endblock %}
