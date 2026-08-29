@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Nav from "../components/Nav";
+import { useAuth } from "../lib/auth";
 
 const steps = [
   {
@@ -49,6 +50,7 @@ const agents = [
 ];
 
 export default function Landing() {
+  const { user } = useAuth();
   const [queue, setQueue] = useState(initialQueue);
 
   useEffect(() => {
@@ -83,7 +85,7 @@ export default function Landing() {
           </p>
           <div className="mt-9 flex flex-wrap items-center gap-4">
             <Link
-              to="/app/recon"
+              to={user ? "/app/recon" : "/signup"}
               className="border border-ink bg-ink px-7 py-3.5 text-[13px] font-bold uppercase tracking-[0.08em] text-paper transition-colors hover:bg-paper hover:text-ink"
             >
               Find your ₹ at risk
@@ -242,7 +244,7 @@ export default function Landing() {
           </h2>
           <div className="mt-10 flex flex-wrap items-center gap-6">
             <Link
-              to="/app/recon"
+              to={user ? "/app/recon" : "/signup"}
               className="border border-ink bg-ink px-9 py-4 text-[13px] font-bold uppercase tracking-[0.08em] text-paper transition-colors hover:bg-paper hover:text-ink"
             >
               Run your first recon

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Nav from "../components/Nav";
 import AppTabs from "../components/AppTabs";
+import { useAuth } from "../lib/auth";
 import {
   type InvoiceDoc,
   type InvoiceFields,
@@ -30,10 +31,16 @@ const TEXT_LABELS: Partial<Record<keyof InvoiceFields, string>> = {
   total: "Total",
 };
 
-function DraftEditor({ doc, onConfirmed }: { doc: InvoiceDoc; onConfirmed: () => void }) {
+function DraftEditor({
+  doc,
+  canAct,
+  onConfirmed,
+}: {
+  doc: InvoiceDoc;
+  canAct: boolean;
+  onConfirmed: () => void;
+}) {
   const [fields, setFields] = useState<InvoiceFields>({ ...doc.fields });
-  const [actor, setActor] = useState("");
-  const [signoff, setSignoff] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -45,7 +52,7 @@ function DraftEditor({ doc, onConfirmed }: { doc: InvoiceDoc; onConfirmed: () =>
     setBusy(true);
     setError("");
     try {
-      await confirmInvoice(doc.invoice_id, fields, actor.trim(), signoff.trim());
+      await confirmInvoice(doc.invoice_id, fields);
       onConfirmed();
     } catch (e) {
       setError((e as Error).message);
@@ -71,23 +78,12 @@ function DraftEditor({ doc, onConfirmed }: { doc: InvoiceDoc; onConfirmed: () =>
         ))}
       </div>
       <div className="mt-4 flex flex-wrap items-end gap-4 border-t border-rule pt-4">
-        <div>
-          <label className="label-caps block">Confirmed by *</label>
-          <input
-            value={actor} onChange={(e) => setActor(e.target.value)} placeholder="Your name"
-            className="border-0 border-b border-rule-2 bg-transparent px-0 py-1 text-sm outline-none focus:border-ink"
-          />
-        </div>
-        <div>
-          <label className="label-caps block">CA sign-off (optional)</label>
-          <input
-            value={signoff} onChange={(e) => setSignoff(e.target.value)} placeholder="Name / membership no."
-            className="border-0 border-b border-rule-2 bg-transparent px-0 py-1 text-sm outline-none focus:border-ink"
-          />
-        </div>
+        <p className="text-[12px] text-sub">
+          Confirmation is recorded under your signed-in identity.
+        </p>
         <button
           onClick={confirm}
-          disabled={busy || !actor.trim()}
+          disabled={busy || !canAct}
           className="ml-auto bg-ink px-5 py-2 text-[12px] font-bold uppercase tracking-[0.1em] text-paper transition-opacity disabled:opacity-40"
         >
           {busy ? "Confirming…" : "Confirm into register"}
@@ -107,6 +103,8 @@ function DraftEditor({ doc, onConfirmed }: { doc: InvoiceDoc; onConfirmed: () =>
 }
 
 export default function Invoices() {
+  const { activeOrg } = useAuth();
+  const canAct = activeOrg != null && activeOrg.role !== "viewer";
   const [period, setPeriod] = useState(currentPeriod());
   const [invoices, setInvoices] = useState<InvoiceDoc[]>([]);
   const [open, setOpen] = useState<string | null>(null);
@@ -224,7 +222,7 @@ export default function Invoices() {
                     {doc.extraction_note && (
                       <p className="px-5 pb-2 text-[12px] italic text-sub">{doc.extraction_note}</p>
                     )}
-                    <DraftEditor doc={doc} onConfirmed={() => { setOpen(null); refresh(); }} />
+                    <DraftEditor doc={doc} canAct={canAct} onConfirmed={() => { setOpen(null); refresh(); }} />
                   </>
                 )}
               </div>

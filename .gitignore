@@ -10,3 +10,4 @@ data/
 uploads/
 .gstack/
 .ruff_cache/
+.claude/

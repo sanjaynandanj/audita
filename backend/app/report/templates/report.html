@@ -70,12 +70,7 @@
     </td>
     <td class="no-print">
       {% if not e.verified %}
-      <form method="post" action="/r/{{ token }}/verify" style="display:flex;flex-direction:column;gap:6px;min-width:130px;">
-        <input type="hidden" name="exception_id" value="{{ e.exception_id }}">
-        <input type="text" name="actor" placeholder="Reviewer" required style="padding:6px 9px;font-size:12px;">
-        <input type="text" name="ca_signoff" placeholder="CA sign-off (opt)" style="padding:6px 9px;font-size:12px;">
-        <button class="btn sm" type="submit">Verify</button>
-      </form>
+      <a class="btn sm" href="/app/r/{{ token }}" style="text-decoration:none;">Verify in app</a>
       {% endif %}
     </td>
   </tr>

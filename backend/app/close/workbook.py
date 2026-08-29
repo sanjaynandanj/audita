@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+
+from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 DEFAULT_ITEMS: list[tuple[str, str]] = [
     ("gst-itc-recon", "GST ITC reconciliation (GSTR-2B vs purchase register)"),
@@ -47,28 +48,45 @@ class CloseWorkbook:
 
 
 class CloseStore:
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
-    def _path(self, period: str) -> Path:
+    @staticmethod
+    def _check_period(period: str) -> str:
         if not _PERIOD_RE.match(period):
             raise ValueError("period must be YYYY-MM")
-        return self.root / f"{period}.json"
+        return period
 
     def load_or_create(self, period: str) -> CloseWorkbook:
-        path = self._path(period)
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return CloseWorkbook(period=data["period"], items=[CloseItem(**i) for i in data["items"]])
+        self._check_period(period)
+        row = self.conn.execute(
+            "SELECT items FROM close_workbooks WHERE org_id = %s AND period = %s",
+            (self.org_id, period),
+        ).fetchone()
+        if row is not None:
+            return CloseWorkbook(period=period, items=[CloseItem(**i) for i in row["items"]])
         wb = CloseWorkbook(period=period, items=[CloseItem(key=k, title=t) for k, t in DEFAULT_ITEMS])
         self.save(wb)
         return wb
 
     def save(self, wb: CloseWorkbook) -> None:
-        self._path(wb.period).write_text(json.dumps(asdict(wb), indent=2), encoding="utf-8")
+        self._check_period(wb.period)
+        self.conn.execute(
+            """
+            INSERT INTO close_workbooks (org_id, period, created_at, items)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (org_id, period) DO UPDATE SET items = EXCLUDED.items
+            """,
+            (self.org_id, wb.period, datetime.now(UTC).isoformat(), Jsonb([asdict(i) for i in wb.items])),
+        )
 
     def set_item(self, period: str, key: str, done: bool, actor: str, note: str = "") -> CloseWorkbook:
+        self._check_period(period)
+        self.conn.execute(
+            "SELECT 1 FROM close_workbooks WHERE org_id = %s AND period = %s FOR UPDATE",
+            (self.org_id, period),
+        )
         wb = self.load_or_create(period)
         for item in wb.items:
             if item.key == key:
@@ -82,4 +100,8 @@ class CloseStore:
         raise KeyError(f"close item {key} not found")
 
     def list_periods(self) -> list[str]:
-        return sorted((p.stem for p in self.root.glob("*.json")), reverse=True)
+        rows = self.conn.execute(
+            "SELECT period FROM close_workbooks WHERE org_id = %s ORDER BY period DESC",
+            (self.org_id,),
+        ).fetchall()
+        return [r["period"] for r in rows]

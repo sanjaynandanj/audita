@@ -2,18 +2,29 @@
 
 The deterministic engine does the matching — the agent orchestrates and
 explains. Precision lives in code, not in the model.
+
+The conversational agent runs outside a web session, so it works inside
+one org set via AUDITA_AGENT_ORG_ID (the org UUID).
 """
 
 from __future__ import annotations
 
-import json
+import os
 from decimal import Decimal
-from pathlib import Path
 
-from .. import config
+from ..db import open_pool
 from ..engine.matcher import match
 from ..parsers import parse_gstr2b, parse_purchase_register
 from ..report.builder import ReportStore, build_report
+
+
+def _org() -> str:
+    org = os.environ.get("AUDITA_AGENT_ORG_ID", "").strip()
+    if not org:
+        raise RuntimeError(
+            "Set AUDITA_AGENT_ORG_ID to the org UUID this agent session works in."
+        )
+    return org
 
 
 def run_reconciliation(gstr2b_path: str, register_path: str, client_name: str) -> dict:
@@ -31,7 +42,8 @@ def run_reconciliation(gstr2b_path: str, register_path: str, client_name: str) -
     books_records = parse_purchase_register(register_path)
     result = match(books_records, gstr2b_records)
     report = build_report(client_name, result)
-    ReportStore(config.REPORTS_DIR).save(report)
+    with open_pool().connection() as conn:
+        ReportStore(conn, _org()).save(report)
     return {
         "report_id": report.report_id,
         "matched": report.matched_count,
@@ -52,7 +64,8 @@ def get_report_summary(report_id: str) -> dict:
     Returns:
         Summary dict with totals and per-exception one-liners.
     """
-    report = ReportStore(config.REPORTS_DIR).load(report_id)
+    with open_pool().connection() as conn:
+        report = ReportStore(conn, _org()).load(report_id)
     return {
         "report_id": report.report_id,
         "client_name": report.client_name,
@@ -74,31 +87,22 @@ def get_report_summary(report_id: str) -> dict:
 
 
 def list_reports() -> list[dict]:
-    """List all reconciliation reports on this machine.
+    """List all reconciliation reports in this workspace.
 
     Returns:
         List of dicts with report_id, client_name, and created_at.
     """
-    out = []
-    reports_dir = Path(config.REPORTS_DIR)
-    if not reports_dir.exists():
-        return out
-    for path in sorted(reports_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            pending = sum(
-                (Decimal(e["itc_amount"]) for e in data.get("exceptions", []) if not e.get("verified")),
-                Decimal("0"),
-            )
-            out.append({
-                "report_id": data["report_id"],
-                "client_name": data["client_name"],
-                "created_at": data["created_at"],
-                "pending_at_risk_inr": str(pending),
-            })
-        except (json.JSONDecodeError, KeyError):
-            continue
-    return out
+    with open_pool().connection() as conn:
+        reports = ReportStore(conn, _org()).list()
+    return [
+        {
+            "report_id": r.report_id,
+            "client_name": r.client_name,
+            "created_at": r.created_at,
+            "pending_at_risk_inr": str(r.pending_at_risk),
+        }
+        for r in reports
+    ]
 
 
 def run_bank_reconciliation(statement_path: str, ledger_path: str, client_name: str) -> dict:
@@ -120,7 +124,8 @@ def run_bank_reconciliation(statement_path: str, ledger_path: str, client_name: 
     book_txns = parse_bank_ledger(ledger_path)
     result = match_bank(bank_txns, book_txns)
     report = build_bank_report(client_name, result)
-    BankReportStore(config.BANKREC_DIR).save(report)
+    with open_pool().connection() as conn:
+        BankReportStore(conn, _org()).save(report)
     return {
         "report_id": report.report_id,
         "matched": report.matched_count,
@@ -144,14 +149,16 @@ def get_workqueue() -> dict:
     from ..review.store import ReviewStore
     from ..workqueue import build_workqueue
 
-    items = build_workqueue(
-        reports_dir=Path(config.REPORTS_DIR),
-        invoice_store=InvoiceStore(config.INVOICES_DIR),
-        ledger_store=LedgerStore(config.BOOKS_DIR / "ledgers"),
-        close_store=CloseStore(config.CLOSE_DIR),
-        review_store=ReviewStore(config.REVIEW_DIR),
-        sign=lambda report_id: report_id,  # agent chat has no link surface
-    )
+    org = _org()
+    with open_pool().connection() as conn:
+        items = build_workqueue(
+            report_store=ReportStore(conn, org),
+            invoice_store=InvoiceStore(conn, org),
+            ledger_store=LedgerStore(conn, org),
+            close_store=CloseStore(conn, org),
+            review_store=ReviewStore(conn, org),
+            sign=lambda report_id: report_id,  # agent chat has no link surface
+        )
     by_agent: dict[str, int] = {}
     for item in items:
         by_agent[item.agent] = by_agent.get(item.agent, 0) + item.count
@@ -179,9 +186,10 @@ def get_invoice_status(period: str) -> dict:
     """
     from ..ap.store import InvoiceStore
 
-    store = InvoiceStore(config.INVOICES_DIR)
-    drafts = store.list(period=period, status="draft")
-    confirmed = store.list(period=period, status="confirmed")
+    with open_pool().connection() as conn:
+        store = InvoiceStore(conn, _org())
+        drafts = store.list(period=period, status="draft")
+        confirmed = store.list(period=period, status="confirmed")
     return {
         "period": period,
         "drafts_awaiting_confirmation": len(drafts),
@@ -211,7 +219,8 @@ def get_ledger_status(period: str) -> dict:
     """
     from ..books.store import LedgerStore, summarize
 
-    ledger = LedgerStore(config.BOOKS_DIR / "ledgers").load(period)
+    with open_pool().connection() as conn:
+        ledger = LedgerStore(conn, _org()).load(period)
     summary = summarize(ledger)
     return {
         "period": period,
@@ -235,7 +244,8 @@ def get_close_status(period: str) -> dict:
     """
     from ..close.workbook import CloseStore
 
-    wb = CloseStore(config.CLOSE_DIR).load_or_create(period)
+    with open_pool().connection() as conn:
+        wb = CloseStore(conn, _org()).load_or_create(period)
     return {
         "period": wb.period,
         "done": wb.done_count,

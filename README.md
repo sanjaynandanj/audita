@@ -5,17 +5,22 @@ reconciliation, month-end close — and a chartered accountant signs every rupee
 
 ```
 audita/
-├── backend/     Python 3.12 · FastAPI · deterministic matching engines · SQLite append-only
-│   │            event log · Google ADK agent layer · Gemini vision (env-gated)
-│   ├── app/{engine,parsers,report,close,events,agents,vision,ap,books,review} + workqueue
-│   ├── tests/               112 tests (engine, parsers, report gating, API, event log, AP, books, review, workqueue)
+├── backend/     Python 3.12 · FastAPI · Postgres (multi-tenant, append-only event log)
+│   │            deterministic matching engines · Google ADK agent layer · Gemini vision (env-gated)
+│   ├── app/{auth,orgs,db,routers,engine,parsers,report,close,events,agents,vision,ap,books,review}
+│   ├── tests/               134 tests (engine, parsers, auth/RBAC, tenancy isolation, API, event log, AP, books, review, workqueue)
 │   └── sample_data/         GSTR-2B JSON, purchase register, bank statement + ledger
 ├── frontend/    TypeScript · React 19 · Tailwind v4 · Vite
-│   └── src/pages/           Landing, Workspace, ITC Recon, Bank Recon, Invoices, Books, Review, Close, Operations
+│   └── src/pages/           Landing, Login/Signup, Workspace, ITC Recon, Bank Recon, Invoices, Books, Review, Close, Operations, Members
 ├── docs/        PRD · TRD · SECURITY · DEPLOYMENT
 ├── Dockerfile   multi-stage: bun builds SPA → python image serves API + app on :8080
-└── docker-compose.yml
+└── docker-compose.yml       app + postgres:16
 ```
+
+**Multi-tenant with strict RBAC.** Signup creates a workspace (org); owners invite members with
+one-shot links at a role: `owner > reviewer > preparer > viewer`. Reviewers (CAs) verify and
+sign off; sign-offs are identity-backed by the session — never a typed name. All data is
+org-isolated in Postgres. Signed report links stay shareable but are view-only.
 
 ## The agents
 
@@ -37,16 +42,19 @@ trail (UPDATE/DELETE rejected at the DB) · signed expiring report links · prec
 ## Quick start (dev)
 
 ```bash
+docker compose up -d postgres                 # Postgres on localhost:5434
+
 # backend
 cd backend && python -m venv .venv && .venv/Scripts/activate
 pip install -e ".[dev]"
-uvicorn app.main:app --port 8000
+uvicorn app.main:app --port 8000              # migrations run at startup
 
 # frontend (second shell)
 cd frontend && bun install && bun run dev     # http://localhost:5173
 ```
 
-Try it with `backend/sample_data/`. Tests: `cd backend && pytest`. Lint: `ruff check app tests`.
+Sign up at `/signup` (creates your workspace), then try it with `backend/sample_data/`.
+Tests: `cd backend && pytest` (uses the compose postgres). Lint: `ruff check app tests`.
 
 ## One-container run
 
@@ -59,6 +67,7 @@ docker compose up --build # http://localhost:8080
 
 ```bash
 cd backend && set GEMINI_API_KEY=...          # Windows
+set AUDITA_AGENT_ORG_ID=<org uuid>            # the workspace the agent works in
 adk run app/agents                            # or: adk web app/agents
 ```
 

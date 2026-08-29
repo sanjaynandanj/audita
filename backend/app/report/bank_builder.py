@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import secrets
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+
+from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 from ..engine.bank import BankBucket, BankMatchResult
 
@@ -74,20 +75,52 @@ def build_bank_report(client_name: str, result: BankMatchResult, period_note: st
 
 
 class BankReportStore:
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def _path(self, report_id: str) -> Path:
-        if not report_id.isalnum():
-            raise ValueError("invalid report id")
-        return self.root / f"{report_id}.json"
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
     def save(self, report: BankReport) -> None:
-        self._path(report.report_id).write_text(json.dumps(asdict(report), indent=2), encoding="utf-8")
+        data = asdict(report)
+        self.conn.execute(
+            """
+            INSERT INTO bank_reports (report_id, org_id, client_name, created_at, period_note,
+                                      matched_count, matched_total, unrecorded, uncleared)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                report.report_id,
+                self.org_id,
+                report.client_name,
+                report.created_at,
+                report.period_note,
+                report.matched_count,
+                report.matched_total,
+                Jsonb(data["unrecorded"]),
+                Jsonb(data["uncleared"]),
+            ),
+        )
 
     def load(self, report_id: str) -> BankReport:
-        data = json.loads(self._path(report_id).read_text(encoding="utf-8"))
-        data["unrecorded"] = [BankItem(**i) for i in data.get("unrecorded", [])]
-        data["uncleared"] = [BankItem(**i) for i in data.get("uncleared", [])]
-        return BankReport(**data)
+        row = self.conn.execute(
+            "SELECT * FROM bank_reports WHERE report_id = %s AND org_id = %s",
+            (report_id, self.org_id),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(report_id)
+        return BankReport(
+            report_id=row["report_id"],
+            client_name=row["client_name"],
+            created_at=row["created_at"],
+            period_note=row["period_note"],
+            matched_count=row["matched_count"],
+            matched_total=row["matched_total"],
+            unrecorded=[BankItem(**i) for i in row["unrecorded"]],
+            uncleared=[BankItem(**i) for i in row["uncleared"]],
+        )
+
+
+def bank_report_org(conn: Connection, report_id: str) -> str:
+    row = conn.execute("SELECT org_id FROM bank_reports WHERE report_id = %s", (report_id,)).fetchone()
+    if row is None:
+        raise FileNotFoundError(report_id)
+    return str(row["org_id"])

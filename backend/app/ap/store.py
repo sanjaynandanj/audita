@@ -8,13 +8,14 @@ after confirmation are new events, never mutations (PRD-2 invariant #3).
 
 from __future__ import annotations
 
-import json
 import re
 import secrets
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
+
+from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -87,17 +88,32 @@ class InvoiceDoc:
     ca_signoff: str = ""
 
 
-class InvoiceStore:
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.files_dir = self.root / "files"
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.files_dir.mkdir(parents=True, exist_ok=True)
+_DOC_COLS = """invoice_id, period, created_at, status, source_file, scan_mime,
+               extraction, fields, extraction_note, confirmed_by, confirmed_at, ca_signoff"""
 
-    def _path(self, invoice_id: str) -> Path:
-        if not invoice_id.isalnum():
-            raise ValueError("invalid invoice id")
-        return self.root / f"{invoice_id}.json"
+
+def _doc_from_row(row: dict) -> InvoiceDoc:
+    suffix = "." + row["scan_mime"].rpartition("/")[2].replace("jpeg", "jpg")
+    return InvoiceDoc(
+        invoice_id=row["invoice_id"],
+        period=row["period"],
+        created_at=row["created_at"],
+        status=row["status"],
+        source_file=row["source_file"],
+        stored_file=f"{row['invoice_id']}{suffix}",
+        extraction=row["extraction"],
+        fields=row["fields"],
+        extraction_note=row["extraction_note"],
+        confirmed_by=row["confirmed_by"],
+        confirmed_at=row["confirmed_at"],
+        ca_signoff=row["ca_signoff"],
+    )
+
+
+class InvoiceStore:
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
     def create(
         self,
@@ -108,63 +124,99 @@ class InvoiceStore:
         extraction: str,
         fields: dict,
         extraction_note: str = "",
+        mime: str = "",
     ) -> InvoiceDoc:
         if not PERIOD_RE.match(period):
             raise ValueError("period must be YYYY-MM")
         invoice_id = secrets.token_hex(8)
-        stored_file = f"{invoice_id}{suffix}"
-        (self.files_dir / stored_file).write_bytes(data)
-        doc = InvoiceDoc(
-            invoice_id=invoice_id,
-            period=period,
-            created_at=datetime.now(UTC).isoformat(),
-            status="draft",
-            source_file=source_file,
-            stored_file=stored_file,
-            extraction=extraction,
-            fields=normalize_fields(fields, strict=False),
-            extraction_note=extraction_note,
-        )
-        self._save(doc)
-        return doc
-
-    def _save(self, doc: InvoiceDoc) -> None:
-        self._path(doc.invoice_id).write_text(
-            json.dumps(asdict(doc), indent=2), encoding="utf-8"
-        )
+        mime = mime or f"application/{suffix.lstrip('.')}"
+        row = self.conn.execute(
+            f"""
+            INSERT INTO invoices (invoice_id, org_id, period, created_at, status, source_file,
+                                  scan, scan_mime, extraction, fields, extraction_note)
+            VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s, %s, %s, %s)
+            RETURNING {_DOC_COLS}
+            """,
+            (
+                invoice_id,
+                self.org_id,
+                period,
+                datetime.now(UTC).isoformat(),
+                source_file,
+                data,
+                mime,
+                extraction,
+                Jsonb(normalize_fields(fields, strict=False)),
+                extraction_note,
+            ),
+        ).fetchone()
+        return _doc_from_row(row)
 
     def load(self, invoice_id: str) -> InvoiceDoc:
-        data = json.loads(self._path(invoice_id).read_text(encoding="utf-8"))
-        return InvoiceDoc(**data)
+        row = self.conn.execute(
+            f"SELECT {_DOC_COLS} FROM invoices WHERE invoice_id = %s AND org_id = %s",
+            (invoice_id, self.org_id),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(invoice_id)
+        return _doc_from_row(row)
+
+    def scan(self, invoice_id: str) -> tuple[bytes, str]:
+        row = self.conn.execute(
+            "SELECT scan, scan_mime FROM invoices WHERE invoice_id = %s AND org_id = %s",
+            (invoice_id, self.org_id),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(invoice_id)
+        return bytes(row["scan"]), row["scan_mime"]
 
     def list(self, period: str = "", status: str = "") -> list[InvoiceDoc]:
-        docs = []
-        for path in sorted(self.root.glob("*.json")):
-            doc = InvoiceDoc(**json.loads(path.read_text(encoding="utf-8")))
-            if period and doc.period != period:
-                continue
-            if status and doc.status != status:
-                continue
-            docs.append(doc)
-        docs.sort(key=lambda d: d.created_at, reverse=True)
-        return docs
+        query = f"SELECT {_DOC_COLS} FROM invoices WHERE org_id = %s"
+        params: list = [self.org_id]
+        if period:
+            query += " AND period = %s"
+            params.append(period)
+        if status:
+            query += " AND status = %s"
+            params.append(status)
+        query += " ORDER BY created_at DESC"
+        return [_doc_from_row(r) for r in self.conn.execute(query, params).fetchall()]
 
     def confirm(
         self, invoice_id: str, fields: dict, actor: str, ca_signoff: str = ""
     ) -> InvoiceDoc:
-        doc = self.load(invoice_id)
-        if doc.status == "confirmed":
+        row = self.conn.execute(
+            "SELECT status FROM invoices WHERE invoice_id = %s AND org_id = %s FOR UPDATE",
+            (invoice_id, self.org_id),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(invoice_id)
+        if row["status"] == "confirmed":
             raise AlreadyConfirmed(f"invoice {invoice_id} is already confirmed")
         fields = normalize_fields(fields)
         if not fields["supplier_gstin"] or not fields["invoice_no"]:
             raise ValueError("supplier_gstin and invoice_no are required to confirm")
-        doc.fields = fields
-        doc.status = "confirmed"
-        doc.confirmed_by = actor
-        doc.confirmed_at = datetime.now(UTC).isoformat()
-        doc.ca_signoff = ca_signoff
-        self._save(doc)
-        return doc
+        updated = self.conn.execute(
+            f"""
+            UPDATE invoices
+            SET status = 'confirmed', fields = %s, confirmed_by = %s, confirmed_at = %s, ca_signoff = %s
+            WHERE invoice_id = %s AND org_id = %s
+            RETURNING {_DOC_COLS}
+            """,
+            (
+                Jsonb(fields),
+                actor,
+                datetime.now(UTC).isoformat(),
+                ca_signoff,
+                invoice_id,
+                self.org_id,
+            ),
+        ).fetchone()
+        return _doc_from_row(updated)
 
     def periods(self) -> list[str]:
-        return sorted({d.period for d in self.list()}, reverse=True)
+        rows = self.conn.execute(
+            "SELECT DISTINCT period FROM invoices WHERE org_id = %s ORDER BY period DESC",
+            (self.org_id,),
+        ).fetchall()
+        return [r["period"] for r in rows]

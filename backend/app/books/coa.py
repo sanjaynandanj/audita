@@ -1,14 +1,15 @@
 """Chart of accounts — default Indian-SME set, seedable and extendable.
 
-Stored as JSON under data/books/coa.json. Codes are stable identifiers;
-ledger entries reference accounts by code.
+One row per (org, code) in coa_accounts; seeded with the default set when
+an org's chart is empty. Codes are stable identifiers; ledger entries
+reference accounts by code.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
+
+from psycopg import Connection
 
 ACCOUNT_TYPES = ("income", "cogs", "expense", "tax", "asset", "liability", "equity")
 
@@ -69,27 +70,33 @@ class Account:
 
 
 class ChartOfAccounts:
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._write([Account(c, n, t) for c, n, t in DEFAULT_ACCOUNTS])
-
-    def _write(self, accounts: list[Account]) -> None:
-        self.path.write_text(
-            json.dumps([asdict(a) for a in accounts], indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
+        row = conn.execute(
+            "SELECT count(*) AS n FROM coa_accounts WHERE org_id = %s", (org_id,)
+        ).fetchone()
+        if row["n"] == 0:
+            conn.cursor().executemany(
+                "INSERT INTO coa_accounts (org_id, code, name, type) VALUES (%s, %s, %s, %s)",
+                [(org_id, c, n, t) for c, n, t in DEFAULT_ACCOUNTS],
+            )
 
     def list(self) -> list[Account]:
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        return sorted((Account(**a) for a in data), key=lambda a: a.code)
+        rows = self.conn.execute(
+            "SELECT code, name, type FROM coa_accounts WHERE org_id = %s ORDER BY code",
+            (self.org_id,),
+        ).fetchall()
+        return [Account(**r) for r in rows]
 
     def get(self, code: str) -> Account:
-        for account in self.list():
-            if account.code == code:
-                return account
-        raise KeyError(f"no account with code {code!r}")
+        row = self.conn.execute(
+            "SELECT code, name, type FROM coa_accounts WHERE org_id = %s AND code = %s",
+            (self.org_id, code),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no account with code {code!r}")
+        return Account(**row)
 
     def add(self, code: str, name: str, type: str) -> Account:
         code, name = code.strip(), name.strip()
@@ -97,9 +104,13 @@ class ChartOfAccounts:
             raise ValueError("account code and name are required")
         if type not in ACCOUNT_TYPES:
             raise ValueError(f"account type must be one of {', '.join(ACCOUNT_TYPES)}")
-        accounts = self.list()
-        if any(a.code == code for a in accounts):
+        exists = self.conn.execute(
+            "SELECT 1 FROM coa_accounts WHERE org_id = %s AND code = %s", (self.org_id, code)
+        ).fetchone()
+        if exists:
             raise ValueError(f"account code {code} already exists")
-        account = Account(code=code, name=name, type=type)
-        self._write([*accounts, account])
-        return account
+        self.conn.execute(
+            "INSERT INTO coa_accounts (org_id, code, name, type) VALUES (%s, %s, %s, %s)",
+            (self.org_id, code, name, type),
+        )
+        return Account(code=code, name=name, type=type)

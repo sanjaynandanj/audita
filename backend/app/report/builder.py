@@ -7,12 +7,13 @@ are listed separately and never enter the headline.
 
 from __future__ import annotations
 
-import json
 import secrets
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+
+from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 from ..engine.models import Bucket, MatchResult
 
@@ -111,32 +112,85 @@ def build_report(client_name: str, result: MatchResult, period_note: str = "") -
     return report
 
 
-class ReportStore:
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+def _report_from_row(row: dict) -> Report:
+    return Report(
+        report_id=row["report_id"],
+        client_name=row["client_name"],
+        created_at=row["created_at"],
+        period_note=row["period_note"],
+        matched_count=row["matched_count"],
+        matched_tax_total=row["matched_tax_total"],
+        exceptions=[ExceptionItem(**e) for e in row["exceptions"]],
+        missed_itc=[ExceptionItem(**e) for e in row["missed_itc"]],
+        unresolved=[ExceptionItem(**e) for e in row["unresolved"]],
+    )
 
-    def _path(self, report_id: str) -> Path:
-        if not report_id.isalnum():
-            raise ValueError("invalid report id")
-        return self.root / f"{report_id}.json"
+
+def report_org(conn: Connection, report_id: str) -> str:
+    """Owning org of a report reached via a signed link (no org in the URL)."""
+    row = conn.execute("SELECT org_id FROM reports WHERE report_id = %s", (report_id,)).fetchone()
+    if row is None:
+        raise FileNotFoundError(report_id)
+    return str(row["org_id"])
+
+
+class ReportStore:
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
     def save(self, report: Report) -> None:
-        self._path(report.report_id).write_text(
-            json.dumps(asdict(report), indent=2), encoding="utf-8"
+        data = asdict(report)
+        self.conn.execute(
+            """
+            INSERT INTO reports (report_id, org_id, client_name, created_at, period_note,
+                                 matched_count, matched_tax_total, exceptions, missed_itc, unresolved)
+            VALUES (%(report_id)s, %(org_id)s, %(client_name)s, %(created_at)s, %(period_note)s,
+                    %(matched_count)s, %(matched_tax_total)s, %(exceptions)s, %(missed_itc)s, %(unresolved)s)
+            ON CONFLICT (report_id) DO UPDATE SET
+                exceptions = EXCLUDED.exceptions,
+                missed_itc = EXCLUDED.missed_itc,
+                unresolved = EXCLUDED.unresolved
+            """,
+            {
+                "report_id": report.report_id,
+                "org_id": self.org_id,
+                "client_name": report.client_name,
+                "created_at": report.created_at,
+                "period_note": report.period_note,
+                "matched_count": report.matched_count,
+                "matched_tax_total": report.matched_tax_total,
+                "exceptions": Jsonb(data["exceptions"]),
+                "missed_itc": Jsonb(data["missed_itc"]),
+                "unresolved": Jsonb(data["unresolved"]),
+            },
         )
 
     def load(self, report_id: str) -> Report:
-        data = json.loads(self._path(report_id).read_text(encoding="utf-8"))
-        data["exceptions"] = [ExceptionItem(**e) for e in data.get("exceptions", [])]
-        data["missed_itc"] = [ExceptionItem(**e) for e in data.get("missed_itc", [])]
-        data["unresolved"] = [ExceptionItem(**e) for e in data.get("unresolved", [])]
-        return Report(**data)
+        row = self.conn.execute(
+            "SELECT * FROM reports WHERE report_id = %s AND org_id = %s",
+            (report_id, self.org_id),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(report_id)
+        return _report_from_row(row)
+
+    def list(self) -> list[Report]:
+        rows = self.conn.execute(
+            "SELECT * FROM reports WHERE org_id = %s ORDER BY created_at", (self.org_id,)
+        ).fetchall()
+        return [_report_from_row(r) for r in rows]
 
     def verify_exception(
         self, report_id: str, exception_id: str, actor: str, ca_signoff: str = ""
     ) -> Report:
-        report = self.load(report_id)
+        row = self.conn.execute(
+            "SELECT * FROM reports WHERE report_id = %s AND org_id = %s FOR UPDATE",
+            (report_id, self.org_id),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(report_id)
+        report = _report_from_row(row)
         item = report.find(exception_id)
         if item is None:
             raise KeyError(f"exception {exception_id} not found")

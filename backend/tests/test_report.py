@@ -22,8 +22,8 @@ class TestHeadlineGating:
         assert report.verified_at_risk == Decimal("0")
         assert report.pending_at_risk == Decimal("500")
 
-    def test_verification_moves_amount_to_headline(self, tmp_path):
-        store = ReportStore(tmp_path)
+    def test_verification_moves_amount_to_headline(self, db_conn, org):
+        store = ReportStore(db_conn, org)
         report = make_report()
         store.save(report)
         exc_id = report.exceptions[0].exception_id
@@ -34,7 +34,7 @@ class TestHeadlineGating:
         assert item.verified_by == "Sanjay"
         assert item.ca_signoff == "CA 123456"
 
-    def test_unresolved_never_in_headline(self, tmp_path):
+    def test_unresolved_never_in_headline(self):
         books = [rec(Source.BOOKS, doc_type="CDN", igst="9999")]
         report = build_report("Client", match(books, []))
         assert report.exceptions == []
@@ -43,8 +43,8 @@ class TestHeadlineGating:
 
 
 class TestStoreRoundTrip:
-    def test_save_load(self, tmp_path):
-        store = ReportStore(tmp_path)
+    def test_save_load(self, db_conn, org):
+        store = ReportStore(db_conn, org)
         report = make_report()
         store.save(report)
         loaded = store.load(report.report_id)
@@ -52,12 +52,23 @@ class TestStoreRoundTrip:
         assert len(loaded.exceptions) == 1
         assert loaded.matched_count == 1
 
-    def test_invalid_report_id_rejected(self, tmp_path):
-        store = ReportStore(tmp_path)
+    def test_unknown_report_id_rejected(self, db_conn, org):
         import pytest
 
-        with pytest.raises(ValueError):
-            store.load("../../etc/passwd")
+        with pytest.raises(FileNotFoundError):
+            ReportStore(db_conn, org).load("no-such-report")
+
+    def test_cross_org_isolation(self, db_conn, org):
+        import pytest
+
+        store = ReportStore(db_conn, org)
+        report = make_report()
+        store.save(report)
+        other = str(
+            db_conn.execute("INSERT INTO orgs (name) VALUES ('Other') RETURNING org_id").fetchone()["org_id"]
+        )
+        with pytest.raises(FileNotFoundError):
+            ReportStore(db_conn, other).load(report.report_id)
 
 
 class TestExcelExport:

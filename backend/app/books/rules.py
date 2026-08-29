@@ -9,11 +9,11 @@ doesn't, so a rule hit is user-authored intent, not an LLM opinion.
 
 from __future__ import annotations
 
-import json
 import secrets
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+
+from psycopg import Connection
 
 RULE_FIELDS = ("description", "ref")
 
@@ -29,24 +29,21 @@ class Rule:
     created_at: str
 
 
-class RuleStore:
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._write([])
+_RULE_COLS = "rule_id, priority, field, contains, account_code, created_by, created_at"
 
-    def _write(self, rules: list[Rule]) -> None:
-        self.path.write_text(
-            json.dumps([asdict(r) for r in rules], indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+
+class RuleStore:
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
     def list(self) -> list[Rule]:
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        rules = [Rule(**r) for r in data]
-        rules.sort(key=lambda r: (r.priority, r.created_at))
-        return rules
+        rows = self.conn.execute(
+            f"SELECT {_RULE_COLS} FROM categorization_rules WHERE org_id = %s "
+            "ORDER BY priority, created_at",
+            (self.org_id,),
+        ).fetchall()
+        return [Rule(**r) for r in rows]
 
     def add(
         self, field: str, contains: str, account_code: str,
@@ -59,10 +56,12 @@ class RuleStore:
             raise ValueError("rule pattern must be at least 3 characters")
         if not account_code:
             raise ValueError("account_code is required")
-        rules = self.list()
-        if any(
-            r.field == field and r.contains.lower() == contains.lower() for r in rules
-        ):
+        dupe = self.conn.execute(
+            "SELECT 1 FROM categorization_rules "
+            "WHERE org_id = %s AND field = %s AND lower(contains) = lower(%s)",
+            (self.org_id, field, contains),
+        ).fetchone()
+        if dupe:
             raise ValueError(f"a rule on {field} containing {contains!r} already exists")
         rule = Rule(
             rule_id=secrets.token_hex(4),
@@ -73,16 +72,23 @@ class RuleStore:
             created_by=created_by,
             created_at=datetime.now(UTC).isoformat(),
         )
-        self._write([*rules, rule])
+        self.conn.execute(
+            "INSERT INTO categorization_rules "
+            "(org_id, rule_id, priority, field, contains, account_code, created_by, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (self.org_id, rule.rule_id, rule.priority, rule.field, rule.contains,
+             rule.account_code, rule.created_by, rule.created_at),
+        )
         return rule
 
     def remove(self, rule_id: str) -> Rule:
-        rules = self.list()
-        for rule in rules:
-            if rule.rule_id == rule_id:
-                self._write([r for r in rules if r.rule_id != rule_id])
-                return rule
-        raise KeyError(f"no rule {rule_id!r}")
+        row = self.conn.execute(
+            f"DELETE FROM categorization_rules WHERE org_id = %s AND rule_id = %s RETURNING {_RULE_COLS}",
+            (self.org_id, rule_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no rule {rule_id!r}")
+        return Rule(**row)
 
 
 def apply_rules(rules: list[Rule], description: str, ref: str) -> Rule | None:

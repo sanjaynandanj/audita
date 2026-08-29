@@ -8,16 +8,15 @@ and every figure is a sum over data the individual agents already gate.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 from .ap.store import InvoiceStore
 from .books.store import LedgerStore
 from .close.workbook import CloseStore
+from .report.builder import ReportStore
 from .review.store import ReviewStore
 
 
@@ -46,32 +45,26 @@ def _age_days(created_at: str) -> int:
     return max(0, (datetime.now(UTC) - then).days)
 
 
-def _recon_items(reports_dir: Path, sign: Callable[[str], str]) -> list[WorkItem]:
+def _recon_items(report_store: ReportStore, sign: Callable[[str], str]) -> list[WorkItem]:
     items: list[WorkItem] = []
-    if not reports_dir.exists():
-        return items
-    for path in sorted(reports_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            pending = [e for e in data.get("exceptions", []) if not e.get("verified")]
-            if not pending:
-                continue
-            total = sum((Decimal(e["itc_amount"]) for e in pending), Decimal("0"))
-            items.append(WorkItem(
-                agent="itc-recon",
-                kind="recon_exceptions",
-                title=f"{len(pending)} unverified ITC exception{'s' if len(pending) != 1 else ''} — "
-                      f"{data.get('client_name', '?')}",
-                detail=f"report {data['report_id']}"
-                       + (f" · {data.get('period_note')}" if data.get("period_note") else ""),
-                amount=str(total),
-                count=len(pending),
-                ref=data["report_id"],
-                age_days=_age_days(data.get("created_at", "")),
-                link=f"/app/r/{sign(data['report_id'])}",
-            ))
-        except (json.JSONDecodeError, KeyError):
+    for report in report_store.list():
+        pending = [e for e in report.exceptions if not e.verified]
+        if not pending:
             continue
+        total = sum((Decimal(e.itc_amount) for e in pending), Decimal("0"))
+        items.append(WorkItem(
+            agent="itc-recon",
+            kind="recon_exceptions",
+            title=f"{len(pending)} unverified ITC exception{'s' if len(pending) != 1 else ''} — "
+                  f"{report.client_name}",
+            detail=f"report {report.report_id}"
+                   + (f" · {report.period_note}" if report.period_note else ""),
+            amount=str(total),
+            count=len(pending),
+            ref=report.report_id,
+            age_days=_age_days(report.created_at),
+            link=f"/app/r/{sign(report.report_id)}",
+        ))
     return items
 
 
@@ -162,7 +155,7 @@ def _review_items(review_store: ReviewStore) -> list[WorkItem]:
 
 
 def build_workqueue(
-    reports_dir: Path,
+    report_store: ReportStore,
     invoice_store: InvoiceStore,
     ledger_store: LedgerStore,
     close_store: CloseStore,
@@ -170,7 +163,7 @@ def build_workqueue(
     sign: Callable[[str], str],
 ) -> list[WorkItem]:
     items = (
-        _recon_items(reports_dir, sign)
+        _recon_items(report_store, sign)
         + _invoice_items(invoice_store)
         + _books_items(ledger_store)
         + _close_items(close_store)

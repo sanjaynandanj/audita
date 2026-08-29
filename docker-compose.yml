@@ -7,10 +7,32 @@ services:
       AUDITA_SECRET_KEY: ${AUDITA_SECRET_KEY:?set in .env}
       AUDITA_CORS_ORIGINS: ${AUDITA_CORS_ORIGINS:-}
       AUDITA_LINK_MAX_AGE: ${AUDITA_LINK_MAX_AGE:-604800}
+      AUDITA_DATABASE_URL: postgresql://audita:audita@postgres:5432/audita
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - audita-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: audita
+      POSTGRES_PASSWORD: audita
+      POSTGRES_DB: audita
+    ports:
+      - "5434:5432"
+    volumes:
+      - audita-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audita -d audita"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
 volumes:
   audita-data:
+  audita-pg:

@@ -2,30 +2,20 @@
 ledger, each flag kind, no-key narration gating, verify flow, and
 verification survival across rebuilds (content-derived flag ids)."""
 
-import os
-import tempfile
+from decimal import Decimal
 
-_TMP = tempfile.mkdtemp(prefix="audita-test-review-")
-os.environ.setdefault("AUDITA_DATA_DIR", _TMP)
-os.environ.pop("GEMINI_API_KEY", None)
+import pytest
 
-from decimal import Decimal  # noqa: E402
-
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.books.coa import Account  # noqa: E402
-from app.books.store import Ledger, new_txn  # noqa: E402
-from app.main import app, ledger_store  # noqa: E402
-from app.review.compute import (  # noqa: E402
+from app.books.coa import Account
+from app.books.store import Ledger, LedgerStore, new_txn
+from app.review.compute import (
     ReviewWorkbook,
     compute_flags,
     compute_pnl,
     prior_period_of,
 )
-from app.review.store import AlreadyVerified, ReviewStore  # noqa: E402
-
-client = TestClient(app)
+from app.review.store import AlreadyVerified, ReviewStore
+from tests.conftest import make_client
 
 ACCOUNTS = [
     Account("4000", "Sales — Domestic", "income"),
@@ -138,8 +128,8 @@ class TestReviewStore:
             pnl=pnl, summary=summary, flags=flags,
         )
 
-    def test_verify_flow_and_immutability(self, tmp_path):
-        store = ReviewStore(tmp_path)
+    def test_verify_flow_and_immutability(self, db_conn, org):
+        store = ReviewStore(db_conn, org)
         wb = store.save_new(self._workbook())
         target = wb.flags[0].flag_id
         flag = store.verify_flag("2026-02", target, actor="Asha", ca_signoff="CA 42")
@@ -148,8 +138,8 @@ class TestReviewStore:
         with pytest.raises(AlreadyVerified):
             store.verify_flag("2026-02", target, actor="Mallory")
 
-    def test_rebuild_preserves_verified_matching_flags(self, tmp_path):
-        store = ReviewStore(tmp_path)
+    def test_rebuild_preserves_verified_matching_flags(self, db_conn, org):
+        store = ReviewStore(db_conn, org)
         wb = store.save_new(self._workbook())
         target = wb.flags[0].flag_id
         store.verify_flag("2026-02", target, actor="Asha")
@@ -165,12 +155,8 @@ class TestReviewApi:
     PERIOD = "2033-02"
     PRIOR_P = "2033-01"
 
-    def _seed_ledgers(self):
-        # seed through the app's own store: other test modules re-point
-        # AUDITA_DATA_DIR after app import, so the env var can't be trusted
-        store = ledger_store
-        if store.load(self.PERIOD).txns:
-            return
+    def _seed_ledgers(self, db_conn, org):
+        store = LedgerStore(db_conn, org)
         store.import_txns(self.PRIOR_P, [
             _txn("05-01-2033", "CUSTOMER PAYMENT ACME RETAIL", "U1", "100000", "4000"),
             _txn("07-01-2033", "SALARY STAFF", "N1", "-40000", "6000"),
@@ -179,14 +165,17 @@ class TestReviewApi:
             _txn("05-02-2033", "CUSTOMER PAYMENT ACME RETAIL", "U2", "120000", "4000"),
             _txn("07-02-2033", "SALARY STAFF", "N2", "-90000", "6000"),
         ])
+        db_conn.commit()
 
-    def test_build_requires_categorized_txns(self):
-        res = client.post("/api/review/1999-01")
+    def test_build_requires_categorized_txns(self, owner_client):
+        client, org = owner_client
+        res = client.post(f"/api/orgs/{org}/review/1999-01")
         assert res.status_code == 400
 
-    def test_build_and_get_workbook_no_llm_key(self):
-        self._seed_ledgers()
-        res = client.post(f"/api/review/{self.PERIOD}")
+    def test_build_and_get_workbook_no_llm_key(self, db_conn, owner_client):
+        client, org = owner_client
+        self._seed_ledgers(db_conn, org)
+        res = client.post(f"/api/orgs/{org}/review/{self.PERIOD}")
         assert res.status_code == 200, res.text
         wb = res.json()["workbook"]
         assert wb["prior_period"] == self.PRIOR_P
@@ -194,30 +183,34 @@ class TestReviewApi:
         assert "not configured" in wb["narrative_note"]
         assert wb["pending_count"] == len(wb["flags"])
         assert any(f["kind"] == "variance" for f in wb["flags"])
-        got = client.get(f"/api/review/{self.PERIOD}").json()["workbook"]
+        got = client.get(f"/api/orgs/{org}/review/{self.PERIOD}").json()["workbook"]
         assert got["summary"] == wb["summary"]
 
-    def test_verify_flag_endpoint_and_events(self):
-        self._seed_ledgers()
-        wb = client.post(f"/api/review/{self.PERIOD}").json()["workbook"]
+    def test_verify_flag_needs_reviewer_and_uses_identity(self, db_conn, owner_client):
+        client, org = owner_client
+        self._seed_ledgers(db_conn, org)
+        wb = client.post(f"/api/orgs/{org}/review/{self.PERIOD}").json()["workbook"]
         flag_id = wb["flags"][0]["flag_id"]
-        res = client.post(
-            f"/api/review/{self.PERIOD}/flags/{flag_id}/verify",
-            json={"actor": "Asha", "ca_signoff": "CA 42"},
-        )
+
+        preparer, _ = make_client(db_conn, "rev-preparer@test.local", role="preparer", org_id=org)
+        res = preparer.post(f"/api/orgs/{org}/review/{self.PERIOD}/flags/{flag_id}/verify")
+        assert res.status_code == 403
+
+        res = client.post(f"/api/orgs/{org}/review/{self.PERIOD}/flags/{flag_id}/verify")
         assert res.status_code == 200, res.text
         wb2 = res.json()["workbook"]
         assert wb2["verified_count"] == 1
-        second = client.post(
-            f"/api/review/{self.PERIOD}/flags/{flag_id}/verify",
-            json={"actor": "Mallory"},
-        )
+        verified = next(f for f in wb2["flags"] if f["flag_id"] == flag_id)
+        assert verified["verified_by"] == "Owner"
+
+        second = client.post(f"/api/orgs/{org}/review/{self.PERIOD}/flags/{flag_id}/verify")
         assert second.status_code == 409
         actions = [e["action"] for e in
-                   client.get("/api/operations?limit=100").json()["events"]]
+                   client.get(f"/api/orgs/{org}/operations?limit=100").json()["events"]]
         assert "review_computed" in actions
         assert "review_flag_verified" in actions
 
-    def test_get_missing_workbook_404(self):
-        res = client.get("/api/review/1998-01")
+    def test_get_missing_workbook_404(self, owner_client):
+        client, org = owner_client
+        res = client.get(f"/api/orgs/{org}/review/1998-01")
         assert res.status_code == 404

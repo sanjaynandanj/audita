@@ -12,13 +12,13 @@ further edits — corrections are new events, never mutations.
 
 from __future__ import annotations
 
-import json
 import re
 import secrets
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+
+from psycopg import Connection
 
 PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -52,97 +52,128 @@ class Ledger:
     txns: list = field(default_factory=list)
 
 
-def _dedupe_key(txn_date: str, description: str, ref: str, amount: str) -> str:
-    return "|".join((txn_date.strip(), description.strip().lower(), ref.strip(), amount))
+_TXN_COLS = """txn_id, txn_date, description, ref, amount, source_ref, status, source,
+               account_code, rule_id, suggested_account, confidence, confirmed_by, confirmed_at"""
 
 
 class LedgerStore:
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
-    def _path(self, period: str) -> Path:
+    @staticmethod
+    def _check_period(period: str) -> str:
         if not PERIOD_RE.match(period):
             raise ValueError("period must be YYYY-MM")
-        return self.root / f"{period}.json"
-
-    def _save(self, ledger: Ledger) -> None:
-        self._path(ledger.period).write_text(
-            json.dumps(asdict(ledger), indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        return period
 
     def load(self, period: str) -> Ledger:
-        path = self._path(period)
-        if not path.exists():
+        self._check_period(period)
+        head = self.conn.execute(
+            "SELECT created_at FROM ledgers WHERE org_id = %s AND period = %s",
+            (self.org_id, period),
+        ).fetchone()
+        if head is None:
             return Ledger(period=period, created_at="", txns=[])
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["txns"] = [LedgerTxn(**t) for t in data["txns"]]
-        return Ledger(**data)
+        rows = self.conn.execute(
+            f"SELECT {_TXN_COLS} FROM ledger_txns WHERE org_id = %s AND period = %s "
+            "ORDER BY txn_date, txn_id",
+            (self.org_id, period),
+        ).fetchall()
+        return Ledger(period=period, created_at=head["created_at"], txns=[LedgerTxn(**r) for r in rows])
 
     def periods(self) -> list[str]:
-        return sorted((p.stem for p in self.root.glob("*.json") if PERIOD_RE.match(p.stem)), reverse=True)
+        rows = self.conn.execute(
+            "SELECT period FROM ledgers WHERE org_id = %s ORDER BY period DESC", (self.org_id,)
+        ).fetchall()
+        return [r["period"] for r in rows]
 
     def import_txns(self, period: str, txns: list[LedgerTxn]) -> tuple[Ledger, int, int]:
         """Append transactions, skipping duplicates already in the period.
 
-        Returns (ledger, imported_count, skipped_count).
+        Returns (ledger, imported_count, skipped_count). Dedupe is the unique
+        index on (org, period, date, lower(description), ref, amount).
         """
-        ledger = self.load(period)
-        if not ledger.created_at:
-            ledger.created_at = datetime.now(UTC).isoformat()
-        existing = {
-            _dedupe_key(t.txn_date, t.description, t.ref, t.amount) for t in ledger.txns
-        }
+        self._check_period(period)
+        self.conn.execute(
+            """
+            INSERT INTO ledgers (org_id, period, created_at) VALUES (%s, %s, %s)
+            ON CONFLICT (org_id, period) DO NOTHING
+            """,
+            (self.org_id, period, datetime.now(UTC).isoformat()),
+        )
         imported = skipped = 0
         for txn in txns:
-            key = _dedupe_key(txn.txn_date, txn.description, txn.ref, txn.amount)
-            if key in existing:
+            row = self.conn.execute(
+                """
+                INSERT INTO ledger_txns (org_id, period, txn_id, txn_date, description, ref,
+                                         amount, source_ref, status, source, account_code, rule_id,
+                                         suggested_account, confidence, confirmed_by, confirmed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (org_id, period, txn_date, (lower(btrim(description))), ref, amount)
+                DO NOTHING
+                RETURNING txn_id
+                """,
+                (self.org_id, period, txn.txn_id, txn.txn_date, txn.description, txn.ref,
+                 txn.amount, txn.source_ref, txn.status, txn.source, txn.account_code, txn.rule_id,
+                 txn.suggested_account, txn.confidence, txn.confirmed_by, txn.confirmed_at),
+            ).fetchone()
+            if row is None:
                 skipped += 1
-                continue
-            existing.add(key)
-            ledger.txns.append(txn)
-            imported += 1
-        self._save(ledger)
-        return ledger, imported, skipped
+            else:
+                imported += 1
+        return self.load(period), imported, skipped
 
     def get_txn(self, period: str, txn_id: str) -> LedgerTxn:
-        for txn in self.load(period).txns:
-            if txn.txn_id == txn_id:
-                return txn
-        raise KeyError(f"no transaction {txn_id!r} in {period}")
+        self._check_period(period)
+        row = self.conn.execute(
+            f"SELECT {_TXN_COLS} FROM ledger_txns WHERE org_id = %s AND period = %s AND txn_id = %s",
+            (self.org_id, period, txn_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no transaction {txn_id!r} in {period}")
+        return LedgerTxn(**row)
 
     def confirm(
         self, period: str, txn_id: str, account_code: str, actor: str
     ) -> LedgerTxn:
-        ledger = self.load(period)
-        for txn in ledger.txns:
-            if txn.txn_id != txn_id:
-                continue
-            if txn.status == "confirmed":
-                raise AlreadyConfirmed(f"transaction {txn_id} is already confirmed")
-            txn.status = "confirmed"
-            txn.source = "human"
-            txn.account_code = account_code
-            txn.confirmed_by = actor
-            txn.confirmed_at = datetime.now(UTC).isoformat()
-            self._save(ledger)
-            return txn
-        raise KeyError(f"no transaction {txn_id!r} in {period}")
+        self._check_period(period)
+        row = self.conn.execute(
+            "SELECT status FROM ledger_txns WHERE org_id = %s AND period = %s AND txn_id = %s FOR UPDATE",
+            (self.org_id, period, txn_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"no transaction {txn_id!r} in {period}")
+        if row["status"] == "confirmed":
+            raise AlreadyConfirmed(f"transaction {txn_id} is already confirmed")
+        updated = self.conn.execute(
+            f"""
+            UPDATE ledger_txns
+            SET status = 'confirmed', source = 'human', account_code = %s,
+                confirmed_by = %s, confirmed_at = %s
+            WHERE org_id = %s AND period = %s AND txn_id = %s
+            RETURNING {_TXN_COLS}
+            """,
+            (account_code, actor, datetime.now(UTC).isoformat(), self.org_id, period, txn_id),
+        ).fetchone()
+        return LedgerTxn(**updated)
 
     def suggest(self, period: str, suggestions: dict[str, tuple[str, str]]) -> int:
         """Attach LLM suggestions {txn_id: (account_code, confidence)} to pending txns."""
-        ledger = self.load(period)
+        self._check_period(period)
         applied = 0
-        for txn in ledger.txns:
-            if txn.status != "pending" or txn.txn_id not in suggestions:
-                continue
-            code, confidence = suggestions[txn.txn_id]
-            txn.suggested_account = code
-            txn.confidence = confidence
-            txn.source = "llm"
-            applied += 1
-        if applied:
-            self._save(ledger)
+        for txn_id, (code, confidence) in suggestions.items():
+            row = self.conn.execute(
+                """
+                UPDATE ledger_txns
+                SET suggested_account = %s, confidence = %s, source = 'llm'
+                WHERE org_id = %s AND period = %s AND txn_id = %s AND status = 'pending'
+                RETURNING txn_id
+                """,
+                (code, confidence, self.org_id, period, txn_id),
+            ).fetchone()
+            if row is not None:
+                applied += 1
         return applied
 
 

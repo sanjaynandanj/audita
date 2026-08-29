@@ -1,50 +1,35 @@
-"""Append-only agent event log.
+"""Append-only agent event log, org-scoped.
 
 Schema per the design doc's Technical Defaults:
-  event_id, agent, action, input_doc_ref, output_ref, actor, reviewed_by, ts
-Inserts only — SQLite triggers physically reject UPDATE and DELETE so the
-trail stays defensible. Postgres swap in a later phase keeps the same shape.
+  event_id, org_id, agent, action, input_doc_ref, output_ref, actor, reviewed_by, ts
+Inserts only — Postgres triggers (db/migrations/0003_events.sql) reject
+UPDATE and DELETE so the trail stays defensible.
 """
 
 from __future__ import annotations
 
-import sqlite3
-from datetime import UTC, datetime
-from pathlib import Path
+from psycopg import Connection
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS agent_events (
-    event_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent         TEXT NOT NULL,
-    action        TEXT NOT NULL,
-    input_doc_ref TEXT NOT NULL DEFAULT '',
-    output_ref    TEXT NOT NULL DEFAULT '',
-    actor         TEXT NOT NULL DEFAULT '',
-    reviewed_by   TEXT NOT NULL DEFAULT '',
-    ts            TEXT NOT NULL
-);
-CREATE TRIGGER IF NOT EXISTS agent_events_no_update
-BEFORE UPDATE ON agent_events
-BEGIN
-    SELECT RAISE(ABORT, 'agent_events is append-only');
-END;
-CREATE TRIGGER IF NOT EXISTS agent_events_no_delete
-BEFORE DELETE ON agent_events
-BEGIN
-    SELECT RAISE(ABORT, 'agent_events is append-only');
-END;
-"""
+_COLS = "event_id, agent, action, input_doc_ref, output_ref, actor, reviewed_by, ts"
+
+
+def _row_dict(row: dict) -> dict:
+    return {
+        "event_id": row["event_id"],
+        "agent": row["agent"],
+        "action": row["action"],
+        "input_doc_ref": row["input_doc_ref"],
+        "output_ref": row["output_ref"],
+        "actor": row["actor"],
+        "reviewed_by": row["reviewed_by"],
+        "ts": row["ts"].isoformat(),
+    }
 
 
 class EventLog:
-    def __init__(self, db_path: str | Path):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
-
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+    def __init__(self, conn: Connection, org_id: str):
+        self.conn = conn
+        self.org_id = org_id
 
     def append(
         self,
@@ -55,29 +40,26 @@ class EventLog:
         actor: str = "",
         reviewed_by: str = "",
     ) -> int:
-        ts = datetime.now(UTC).isoformat()
-        with self._connect() as conn:
-            cur = conn.execute(
-                "INSERT INTO agent_events (agent, action, input_doc_ref, output_ref, actor, reviewed_by, ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (agent, action, input_doc_ref, output_ref, actor, reviewed_by, ts),
-            )
-            return int(cur.lastrowid)
+        row = self.conn.execute(
+            """
+            INSERT INTO agent_events (org_id, agent, action, input_doc_ref, output_ref, actor, reviewed_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING event_id
+            """,
+            (self.org_id, agent, action, input_doc_ref, output_ref, actor, reviewed_by),
+        ).fetchone()
+        return int(row["event_id"])
 
     def recent(self, limit: int = 25) -> list[dict]:
-        with self._connect() as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM agent_events ORDER BY event_id DESC LIMIT ?",
-                (max(1, min(int(limit), 200)),),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        rows = self.conn.execute(
+            f"SELECT {_COLS} FROM agent_events WHERE org_id = %s ORDER BY event_id DESC LIMIT %s",
+            (self.org_id, max(1, min(int(limit), 200))),
+        ).fetchall()
+        return [_row_dict(r) for r in rows]
 
     def for_output(self, output_ref: str) -> list[dict]:
-        with self._connect() as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM agent_events WHERE output_ref = ? ORDER BY event_id",
-                (output_ref,),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        rows = self.conn.execute(
+            f"SELECT {_COLS} FROM agent_events WHERE org_id = %s AND output_ref = %s ORDER BY event_id",
+            (self.org_id, output_ref),
+        ).fetchall()
+        return [_row_dict(r) for r in rows]

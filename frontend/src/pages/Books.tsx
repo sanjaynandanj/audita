@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Nav from "../components/Nav";
 import AppTabs from "../components/AppTabs";
+import { useAuth } from "../lib/auth";
 import {
   type Account,
   type CatRule,
@@ -30,14 +31,14 @@ function PendingRow({
   txn,
   period,
   accounts,
-  actor,
+  canAct,
   onConfirmed,
   onError,
 }: {
   txn: LedgerTxn;
   period: string;
   accounts: Account[];
-  actor: string;
+  canAct: boolean;
   onConfirmed: (r: LedgerResponse) => void;
   onError: (msg: string) => void;
 }) {
@@ -48,7 +49,7 @@ function PendingRow({
   async function confirm() {
     setBusy(true);
     try {
-      const r = await confirmTxn(period, txn.txn_id, account, actor.trim(), rulePattern.trim());
+      const r = await confirmTxn(period, txn.txn_id, account, rulePattern.trim());
       onConfirmed(r);
     } catch (e) {
       onError((e as Error).message);
@@ -96,7 +97,7 @@ function PendingRow({
       <td className="py-2.5 text-right">
         <button
           onClick={confirm}
-          disabled={busy || !account || !actor.trim()}
+          disabled={busy || !account || !canAct}
           className="bg-ink px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.1em] text-paper transition-opacity disabled:opacity-40"
         >
           {busy ? "…" : "Confirm"}
@@ -107,11 +108,12 @@ function PendingRow({
 }
 
 export default function Books() {
+  const { activeOrg } = useAuth();
+  const canAct = activeOrg != null && activeOrg.role !== "viewer";
   const [period, setPeriod] = useState(currentPeriod());
   const [data, setData] = useState<LedgerResponse | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [rules, setRules] = useState<CatRule[]>([]);
-  const [actor, setActor] = useState("");
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [showRules, setShowRules] = useState(false);
@@ -167,15 +169,6 @@ export default function Books() {
             <h1 className="mt-2 text-3xl font-extrabold tracking-tight">Books {period}</h1>
           </div>
           <div className="flex items-end gap-6">
-            <div>
-              <label className="label-caps block">Working as</label>
-              <input
-                value={actor}
-                onChange={(e) => setActor(e.target.value)}
-                placeholder="Your name"
-                className="border-0 border-b border-rule-2 bg-transparent px-0 py-1.5 text-sm outline-none focus:border-ink"
-              />
-            </div>
             <div>
               <label className="label-caps block">Period</label>
               <input
@@ -254,7 +247,7 @@ export default function Books() {
                     txn={t}
                     period={period}
                     accounts={accounts}
-                    actor={actor}
+                    canAct={canAct}
                     onConfirmed={(r) => {
                       setData(r);
                       getRules().then((x) => setRules(x.rules)).catch(() => undefined);
@@ -265,9 +258,10 @@ export default function Books() {
               </tbody>
             </table>
           )}
-          {pending.length > 0 && !actor.trim() && (
+          {pending.length > 0 && !canAct && (
             <p className="mt-2 text-[12px] italic text-sub">
-              Enter your name under “Working as” to confirm categorizations.
+              Your role is view-only — ask an owner to make you a preparer to confirm
+              categorizations.
             </p>
           )}
         </section>

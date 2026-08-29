@@ -1,4 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
+import { useAuth } from "../lib/auth";
 
 const tabs = [
   { to: "/app", label: "Workspace", match: (p: string) => p === "/app" },
@@ -13,10 +14,14 @@ const tabs = [
 
 export default function AppTabs() {
   const { pathname } = useLocation();
+  const { activeOrg } = useAuth();
+  const visible = activeOrg?.role === "owner"
+    ? [...tabs, { to: "/app/members", label: "Members", match: (p: string) => p.startsWith("/app/members") }]
+    : tabs;
   return (
     <div className="border-b border-rule bg-paper">
       <div className="mx-auto flex max-w-6xl gap-1 px-6">
-        {tabs.map((t) => {
+        {visible.map((t) => {
           const active = t.match(pathname);
           return (
             <Link

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import Nav from "../components/Nav";
 import AppTabs from "../components/AppTabs";
+import { useAuth } from "../lib/auth";
 import {
   type PnlLine,
   type ReviewFlag,
@@ -28,23 +29,22 @@ const TYPE_ORDER = ["income", "cogs", "expense", "tax", "asset", "liability", "e
 function FlagRow({
   flag,
   period,
-  actor,
+  canVerify,
   onUpdated,
   onError,
 }: {
   flag: ReviewFlag;
   period: string;
-  actor: string;
+  canVerify: boolean;
   onUpdated: (wb: ReviewWorkbook) => void;
   onError: (msg: string) => void;
 }) {
-  const [signoff, setSignoff] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function verify() {
     setBusy(true);
     try {
-      const r = await verifyReviewFlag(period, flag.flag_id, actor.trim(), signoff.trim());
+      const r = await verifyReviewFlag(period, flag.flag_id);
       onUpdated(r.workbook);
     } catch (e) {
       onError((e as Error).message);
@@ -73,22 +73,16 @@ function FlagRow({
             ✓ {flag.verified_by}
             {flag.ca_signoff && <span className="ml-1 font-mono text-[11px]">({flag.ca_signoff})</span>}
           </span>
+        ) : canVerify ? (
+          <button
+            onClick={verify}
+            disabled={busy}
+            className="bg-ink px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.1em] text-paper transition-opacity disabled:opacity-40"
+          >
+            {busy ? "…" : "Verify"}
+          </button>
         ) : (
-          <span className="flex items-center gap-2">
-            <input
-              value={signoff}
-              onChange={(e) => setSignoff(e.target.value)}
-              placeholder="CA sign-off (optional)"
-              className="w-40 border-0 border-b border-rule-2 bg-transparent px-0 py-1 text-[12px] outline-none placeholder:text-sub/70 focus:border-ink"
-            />
-            <button
-              onClick={verify}
-              disabled={busy || !actor.trim()}
-              className="bg-ink px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.1em] text-paper transition-opacity disabled:opacity-40"
-            >
-              {busy ? "…" : "Verify"}
-            </button>
-          </span>
+          <span className="text-[11px] italic text-sub">reviewer sign-off required</span>
         )}
       </div>
     </div>
@@ -96,9 +90,11 @@ function FlagRow({
 }
 
 export default function Review() {
+  const { activeOrg } = useAuth();
+  const canVerify = activeOrg?.role === "reviewer" || activeOrg?.role === "owner";
+  const canBuild = activeOrg != null && activeOrg.role !== "viewer";
   const [period, setPeriod] = useState(currentPeriod());
   const [workbook, setWorkbook] = useState<ReviewWorkbook | null>(null);
-  const [actor, setActor] = useState("");
   const [error, setError] = useState("");
   const [notFound, setNotFound] = useState(false);
   const [building, setBuilding] = useState(false);
@@ -153,15 +149,6 @@ export default function Review() {
           </div>
           <div className="flex items-end gap-6">
             <div>
-              <label className="label-caps block">Working as</label>
-              <input
-                value={actor}
-                onChange={(e) => setActor(e.target.value)}
-                placeholder="Your name"
-                className="border-0 border-b border-rule-2 bg-transparent px-0 py-1.5 text-sm outline-none focus:border-ink"
-              />
-            </div>
-            <div>
               <label className="label-caps block">Period</label>
               <input
                 type="month"
@@ -172,7 +159,7 @@ export default function Review() {
             </div>
             <button
               onClick={build}
-              disabled={building}
+              disabled={building || !canBuild}
               className="bg-ink px-5 py-2 text-[12px] font-bold uppercase tracking-[0.1em] text-paper transition-opacity disabled:opacity-40"
             >
               {building ? "Computing…" : workbook ? "Rebuild workbook" : "Build workbook"}
@@ -266,16 +253,16 @@ export default function Review() {
                       key={flag.flag_id}
                       flag={flag}
                       period={period}
-                      actor={actor}
+                      canVerify={canVerify}
                       onUpdated={setWorkbook}
                       onError={setError}
                     />
                   ))}
                 </div>
               )}
-              {workbook.pending_count > 0 && !actor.trim() && (
+              {workbook.pending_count > 0 && !canVerify && (
                 <p className="mt-2 text-[12px] italic text-sub">
-                  Enter your name under “Working as” to verify flags.
+                  Verifying flags requires the reviewer role — ask a workspace owner.
                 </p>
               )}
             </section>

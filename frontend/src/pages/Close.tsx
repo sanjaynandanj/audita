@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Nav from "../components/Nav";
 import AppTabs from "../components/AppTabs";
 import { type CloseResponse, getClose, setCloseItem } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 function currentPeriod(): string {
   const d = new Date();
@@ -9,9 +10,10 @@ function currentPeriod(): string {
 }
 
 export default function Close() {
+  const { activeOrg } = useAuth();
+  const canAct = activeOrg != null && activeOrg.role !== "viewer";
   const [period, setPeriod] = useState(currentPeriod());
   const [data, setData] = useState<CloseResponse | null>(null);
-  const [actor, setActor] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -19,10 +21,13 @@ export default function Close() {
   }, [period]);
 
   async function toggle(key: string, done: boolean) {
-    if (done && !actor.trim()) { setError("Enter your name (top right) before ticking items."); return; }
     setError("");
-    const res = await setCloseItem(period, key, done, actor.trim());
-    setData(res);
+    try {
+      const res = await setCloseItem(period, key, done);
+      setData(res);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   const items = data?.workbook.items ?? [];
@@ -38,21 +43,12 @@ export default function Close() {
             <div className="label-caps">Close Agent · Month-end workbook</div>
             <h1 className="mt-2 text-3xl font-extrabold tracking-tight">Close {period}</h1>
           </div>
-          <div className="flex items-end gap-4">
-            <div>
-              <label className="label-caps block">Period</label>
-              <input
-                type="month" value={period} onChange={(e) => setPeriod(e.target.value)}
-                className="border-0 border-b border-rule-2 bg-transparent px-0 py-1.5 font-mono text-sm outline-none focus:border-ink"
-              />
-            </div>
-            <div>
-              <label className="label-caps block">Your name</label>
-              <input
-                value={actor} onChange={(e) => setActor(e.target.value)} placeholder="Reviewer"
-                className="border-0 border-b border-rule-2 bg-transparent px-0 py-1.5 text-sm outline-none focus:border-ink"
-              />
-            </div>
+          <div>
+            <label className="label-caps block">Period</label>
+            <input
+              type="month" value={period} onChange={(e) => setPeriod(e.target.value)}
+              className="border-0 border-b border-rule-2 bg-transparent px-0 py-1.5 font-mono text-sm outline-none focus:border-ink"
+            />
           </div>
         </div>
 
@@ -73,10 +69,12 @@ export default function Close() {
           {items.map((item, idx) => (
             <label
               key={item.key}
-              className="flex cursor-pointer items-start gap-4 border-b border-rule py-4 transition-colors hover:bg-card"
+              className={`flex items-start gap-4 border-b border-rule py-4 transition-colors ${
+                canAct ? "cursor-pointer hover:bg-card" : ""
+              }`}
             >
               <input
-                type="checkbox" checked={item.done}
+                type="checkbox" checked={item.done} disabled={!canAct}
                 onChange={(e) => toggle(item.key, e.target.checked)}
                 className="mt-1 h-4 w-4 accent-[#17140e]"
               />
@@ -97,8 +95,8 @@ export default function Close() {
         </div>
 
         <p className="mt-6 text-[12px] leading-relaxed text-sub">
-          Every tick and un-tick is written to the append-only event log with your name on it.
-          The workbook is per-period — switch the month above to roll forward.
+          Every tick and un-tick is written to the append-only event log under your signed-in
+          identity. The workbook is per-period — switch the month above to roll forward.
         </p>
       </main>
     </div>

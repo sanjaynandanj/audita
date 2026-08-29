@@ -70,25 +70,33 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// The active workspace, set by AuthProvider. All org-scoped endpoints hang
+// off /api/orgs/{org_id}; signed-link report endpoints stay unscoped.
+let activeOrgId = "";
+
+export function setApiOrg(orgId: string): void {
+  activeOrgId = orgId;
+}
+
+function orgBase(): string {
+  if (!activeOrgId) throw new Error("No active workspace. Sign in first.");
+  return `/api/orgs/${encodeURIComponent(activeOrgId)}`;
+}
+
 export async function runRecon(form: FormData): Promise<{ report_id: string; token: string }> {
-  return handle(await fetch("/api/recon", { method: "POST", body: form }));
+  return handle(await fetch(`${orgBase()}/recon`, { method: "POST", body: form }));
 }
 
 export async function getReport(token: string): Promise<ReportResponse> {
   return handle(await fetch(`/api/reports/${encodeURIComponent(token)}`));
 }
 
-export async function verifyException(
-  token: string,
-  exception_id: string,
-  actor: string,
-  ca_signoff: string,
-): Promise<ReportResponse> {
+export async function verifyException(token: string, exception_id: string): Promise<ReportResponse> {
   return handle(
     await fetch(`/api/reports/${encodeURIComponent(token)}/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ exception_id, actor, ca_signoff }),
+      body: JSON.stringify({ exception_id }),
     }),
   );
 }
@@ -134,7 +142,7 @@ export interface BankReport {
 }
 
 export async function runBankRec(form: FormData): Promise<{ report_id: string; token: string }> {
-  return handle(await fetch("/api/bankrec", { method: "POST", body: form }));
+  return handle(await fetch(`${orgBase()}/bankrec`, { method: "POST", body: form }));
 }
 
 export async function getBankReport(token: string): Promise<{ report: BankReport }> {
@@ -159,17 +167,17 @@ export interface CloseResponse {
 }
 
 export async function getClose(period: string): Promise<CloseResponse> {
-  return handle(await fetch(`/api/close/${encodeURIComponent(period)}`));
+  return handle(await fetch(`${orgBase()}/close/${encodeURIComponent(period)}`));
 }
 
 export async function setCloseItem(
-  period: string, key: string, done: boolean, actor: string, note = "",
+  period: string, key: string, done: boolean, note = "",
 ): Promise<CloseResponse> {
   return handle(
-    await fetch(`/api/close/${encodeURIComponent(period)}/item`, {
+    await fetch(`${orgBase()}/close/${encodeURIComponent(period)}/item`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key, done, actor, note }),
+      body: JSON.stringify({ key, done, note }),
     }),
   );
 }
@@ -208,7 +216,7 @@ export async function uploadInvoice(period: string, file: File): Promise<{ invoi
   const form = new FormData();
   form.append("period", period);
   form.append("invoice_file", file);
-  return handle(await fetch("/api/invoices", { method: "POST", body: form }));
+  return handle(await fetch(`${orgBase()}/invoices`, { method: "POST", body: form }));
 }
 
 export async function listInvoices(
@@ -217,23 +225,23 @@ export async function listInvoices(
   const params = new URLSearchParams();
   if (period) params.set("period", period);
   if (status) params.set("status", status);
-  return handle(await fetch(`/api/invoices?${params}`));
+  return handle(await fetch(`${orgBase()}/invoices?${params}`));
 }
 
 export async function confirmInvoice(
-  invoice_id: string, fields: InvoiceFields, actor: string, ca_signoff = "",
+  invoice_id: string, fields: InvoiceFields,
 ): Promise<{ invoice: InvoiceDoc; trail: TrailEvent[] }> {
   return handle(
-    await fetch(`/api/invoices/${encodeURIComponent(invoice_id)}/confirm`, {
+    await fetch(`${orgBase()}/invoices/${encodeURIComponent(invoice_id)}/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields, actor, ca_signoff }),
+      body: JSON.stringify({ fields }),
     }),
   );
 }
 
 export function registerCsvUrl(period: string): string {
-  return `/api/registers/${encodeURIComponent(period)}.csv`;
+  return `${orgBase()}/registers/${encodeURIComponent(period)}.csv`;
 }
 
 // ---- Bookkeeping Agent (transaction categorization) ----
@@ -291,7 +299,7 @@ export async function importStatement(period: string, file: File): Promise<Ledge
   const form = new FormData();
   form.append("statement_file", file);
   return handle(
-    await fetch(`/api/books/${encodeURIComponent(period)}/transactions`, {
+    await fetch(`${orgBase()}/books/${encodeURIComponent(period)}/transactions`, {
       method: "POST",
       body: form,
     }),
@@ -299,38 +307,37 @@ export async function importStatement(period: string, file: File): Promise<Ledge
 }
 
 export async function getLedger(period: string): Promise<LedgerResponse> {
-  return handle(await fetch(`/api/books/${encodeURIComponent(period)}`));
+  return handle(await fetch(`${orgBase()}/books/${encodeURIComponent(period)}`));
 }
 
 export async function confirmTxn(
   period: string,
   txn_id: string,
   account_code: string,
-  actor: string,
   rule_pattern = "",
 ): Promise<LedgerResponse> {
   return handle(
     await fetch(
-      `/api/books/${encodeURIComponent(period)}/txn/${encodeURIComponent(txn_id)}/confirm`,
+      `${orgBase()}/books/${encodeURIComponent(period)}/txn/${encodeURIComponent(txn_id)}/confirm`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ account_code, actor, rule_pattern }),
+        body: JSON.stringify({ account_code, rule_pattern }),
       },
     ),
   );
 }
 
 export async function getCoa(): Promise<{ accounts: Account[] }> {
-  return handle(await fetch("/api/books/coa"));
+  return handle(await fetch(`${orgBase()}/books/coa`));
 }
 
 export async function getRules(): Promise<{ rules: CatRule[] }> {
-  return handle(await fetch("/api/books/rules"));
+  return handle(await fetch(`${orgBase()}/books/rules`));
 }
 
 export function ledgerCsvUrl(period: string): string {
-  return `/api/books/${encodeURIComponent(period)}/ledger.csv`;
+  return `${orgBase()}/books/${encodeURIComponent(period)}/ledger.csv`;
 }
 
 // ---- Review Agent (monthly financial review) ----
@@ -379,28 +386,19 @@ export interface ReviewResponse {
 
 export async function buildReview(period: string): Promise<ReviewResponse> {
   return handle(
-    await fetch(`/api/review/${encodeURIComponent(period)}`, { method: "POST" }),
+    await fetch(`${orgBase()}/review/${encodeURIComponent(period)}`, { method: "POST" }),
   );
 }
 
 export async function getReview(period: string): Promise<ReviewResponse> {
-  return handle(await fetch(`/api/review/${encodeURIComponent(period)}`));
+  return handle(await fetch(`${orgBase()}/review/${encodeURIComponent(period)}`));
 }
 
-export async function verifyReviewFlag(
-  period: string,
-  flag_id: string,
-  actor: string,
-  ca_signoff = "",
-): Promise<ReviewResponse> {
+export async function verifyReviewFlag(period: string, flag_id: string): Promise<ReviewResponse> {
   return handle(
     await fetch(
-      `/api/review/${encodeURIComponent(period)}/flags/${encodeURIComponent(flag_id)}/verify`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actor, ca_signoff }),
-      },
+      `${orgBase()}/review/${encodeURIComponent(period)}/flags/${encodeURIComponent(flag_id)}/verify`,
+      { method: "POST" },
     ),
   );
 }
@@ -426,11 +424,83 @@ export interface WorkqueueResponse {
 }
 
 export async function getWorkqueue(): Promise<WorkqueueResponse> {
-  return handle(await fetch("/api/workqueue"));
+  return handle(await fetch(`${orgBase()}/workqueue`));
+}
+
+// ---- Auth & org management ----
+
+export interface InvitePreview {
+  org_name: string;
+  role: string;
+  email: string;
+}
+
+export interface OrgMember {
+  user_id: string;
+  email: string;
+  display_name: string;
+  ca_membership_no: string;
+  role: string;
+  joined_at: string;
+}
+
+export interface PendingInvite {
+  invite_id: string;
+  role: string;
+  email: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface CreatedInvite {
+  invite_token: string;
+  invite_path: string;
+  role: string;
+  expires_days: number;
+}
+
+export async function previewInvite(token: string): Promise<InvitePreview> {
+  return handle(await fetch(`/api/invites/${encodeURIComponent(token)}`));
+}
+
+export async function createInvite(orgId: string, role: string, email = ""): Promise<CreatedInvite> {
+  return handle(
+    await fetch(`/api/orgs/${encodeURIComponent(orgId)}/invites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, email }),
+    }),
+  );
+}
+
+export async function listInvites(orgId: string): Promise<{ invites: PendingInvite[] }> {
+  return handle(await fetch(`/api/orgs/${encodeURIComponent(orgId)}/invites`));
+}
+
+export async function listMembers(orgId: string): Promise<{ members: OrgMember[] }> {
+  return handle(await fetch(`/api/orgs/${encodeURIComponent(orgId)}/members`));
+}
+
+export async function setMemberRole(orgId: string, userId: string, role: string): Promise<{ ok: boolean }> {
+  return handle(
+    await fetch(`/api/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    }),
+  );
+}
+
+export async function removeMember(orgId: string, userId: string): Promise<{ ok: boolean }> {
+  return handle(
+    await fetch(`/api/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    }),
+  );
 }
 
 // ---- Operations feed ----
 
 export async function getOperations(limit = 25): Promise<{ events: TrailEvent[] }> {
-  return handle(await fetch(`/api/operations?limit=${limit}`));
+  return handle(await fetch(`${orgBase()}/operations?limit=${limit}`));
 }

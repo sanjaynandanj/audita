@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import Nav from "../components/Nav";
 import AppTabs from "../components/AppTabs";
 import CountUp from "../components/CountUp";
@@ -7,6 +7,7 @@ import {
   type ExceptionItem, type Report, type TrailEvent,
   getReport, inr, verifyException,
 } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 function SideCell({ side }: { side: ExceptionItem["books"] }) {
   if (!side) return <span className="text-sub">—</span>;
@@ -21,38 +22,33 @@ function SideCell({ side }: { side: ExceptionItem["books"] }) {
   );
 }
 
-function VerifyForm({ token, exceptionId, onDone }: {
+function VerifyButton({ token, exceptionId, onDone }: {
   token: string; exceptionId: string; onDone: (r: Report, t: TrailEvent[]) => void;
 }) {
-  const [actor, setActor] = useState("");
-  const [signoff, setSignoff] = useState("");
   const [busy, setBusy] = useState(false);
-  const cls =
-    "w-full border-0 border-b border-rule-2 bg-transparent px-0 py-1 text-xs outline-none focus:border-ink";
+  const [error, setError] = useState("");
   return (
-    <form
-      className="flex min-w-[140px] flex-col gap-1.5"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (!actor.trim()) return;
-        setBusy(true);
-        try {
-          const res = await verifyException(token, exceptionId, actor.trim(), signoff.trim());
-          onDone(res.report, res.trail);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder="Reviewer" required className={cls} />
-      <input value={signoff} onChange={(e) => setSignoff(e.target.value)} placeholder="CA sign-off (opt)" className={cls} />
+    <div className="flex min-w-[110px] flex-col gap-1">
       <button
         disabled={busy}
-        className="mt-1 border border-ink bg-ink px-3 py-1.5 text-[11px] font-semibold text-paper transition-colors hover:bg-card hover:text-ink disabled:opacity-50"
+        onClick={async () => {
+          setBusy(true);
+          setError("");
+          try {
+            const res = await verifyException(token, exceptionId);
+            onDone(res.report, res.trail);
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="border border-ink bg-ink px-3 py-1.5 text-[11px] font-semibold text-paper transition-colors hover:bg-card hover:text-ink disabled:opacity-50"
       >
         {busy ? "…" : "Verify"}
       </button>
-    </form>
+      {error && <span className="text-[10px] text-oxide-2">{error}</span>}
+    </div>
   );
 }
 
@@ -77,6 +73,11 @@ const TD = "px-3 py-3 align-top border-b border-rule text-[13px]";
 
 export default function ReportPage() {
   const { token = "" } = useParams();
+  const { user, activeOrg } = useAuth();
+  const { pathname } = useLocation();
+  // Verification is identity-backed: the API additionally checks membership
+  // in the org that owns this report.
+  const canVerify = user != null && (activeOrg?.role === "reviewer" || activeOrg?.role === "owner");
   const [report, setReport] = useState<Report | null>(null);
   const [trail, setTrail] = useState<TrailEvent[]>([]);
   const [error, setError] = useState("");
@@ -210,7 +211,17 @@ export default function ReportPage() {
                     )}
                   </td>
                   <td className={`${TD} print:hidden`}>
-                    {!e.verified && <VerifyForm token={token} exceptionId={e.exception_id} onDone={onDone} />}
+                    {!e.verified && canVerify && (
+                      <VerifyButton token={token} exceptionId={e.exception_id} onDone={onDone} />
+                    )}
+                    {!e.verified && !user && (
+                      <Link
+                        to={`/login?next=${encodeURIComponent(pathname)}`}
+                        className="text-[11px] font-semibold underline underline-offset-4"
+                      >
+                        Sign in to verify
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}
